@@ -120,6 +120,8 @@ final class SenderController: ObservableObject {
         Task {
             do {
                 try await sender.start()
+            } catch is CancellationError {
+                // stopped by the user while waiting — nothing to report
             } catch {
                 Log.info("sender failed to start: \(error)")
                 self.status = "Failed: \(error.localizedDescription)"
@@ -133,6 +135,10 @@ final class SenderController: ObservableObject {
         sender = nil
         running = false
         status = "Stopped"
+    }
+
+    func reconnect() {
+        sender?.forceReconnect()
     }
 
     func restartIfRunning() {
@@ -200,6 +206,15 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if controller.running {
+                    Button {
+                        controller.reconnect()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .controlSize(.large)
+                    .help("Drop the connection and pair with the phone again")
+                }
                 Button(controller.running ? "Stop" : "Start") {
                     controller.running ? controller.stop() : controller.start()
                 }

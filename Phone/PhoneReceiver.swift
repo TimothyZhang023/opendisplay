@@ -11,14 +11,28 @@ import Network
 import AVFoundation
 import CoreMedia
 
+/// One-second window of pipeline health, plus per-frame timing samples for
+/// the performance overlay graph.
+struct PerfStats: Equatable {
+    var fps = 0
+    var mbps = 0.0
+    var avgFrameMs = 0.0
+    var maxFrameMs = 0.0
+    var stalls = 0               // frames that arrived >50ms late (this window)
+    var decodeFlushes = 0        // display layer failures since connect
+    var samples: [Double] = []   // last ~120 inter-frame intervals, ms
+}
+
 final class PhoneReceiver: ObservableObject {
 
     @Published var status = "Starting…"
     @Published var fps = 0
     @Published var connected = false
     @Published var videoSize = CGSize.zero   // for touch coordinate mapping
+    @Published var perf = PerfStats()
 
     private var listener: NWListener?
+    private var listenerHealthy = false
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "receiver.video")
     private var buffer = Data()
@@ -26,8 +40,21 @@ final class PhoneReceiver: ObservableObject {
     private var sps: Data?
     private var pps: Data?
 
+    // Liveness: the Mac streams video and pings every 2s; if nothing arrives
+    // for 5s the connection is half-open (Mac killed, tunnel died) — drop it
+    // so the listener can accept a fresh one.
+    private var lastDataReceived = Date()
+    private var port: UInt16 = 9000
+    private var monitorsStarted = false
+
     private var framesThisWindow = 0
     private var fpsWindowStart = Date()
+    private var bytesThisWindow = 0
+    private var stallsThisWindow = 0
+    private var decodeFlushes = 0
+    private var lastFrameAt: Date?
+    private var frameIntervals: [Double] = []   // ring buffer, ms
+    private let maxSamples = 120
 
     let displayLayer: AVSampleBufferDisplayLayer
 
@@ -68,6 +95,33 @@ final class PhoneReceiver: ObservableObject {
     }
 
     func start(port: UInt16 = 9000) {
+        self.port = port
+        queue.async { self.startListener() }
+        if !monitorsStarted {
+            monitorsStarted = true
+            schedulePing()
+            scheduleWatchdog()
+        }
+    }
+
+    /// Recreate the listener if it isn't healthy — called when the app
+    /// returns to the foreground (iOS may have torn it down while suspended).
+    func ensureListening() {
+        queue.async {
+            guard !self.listenerHealthy else { return }
+            Log.info("listener not healthy — restarting")
+            self.restartListener()
+        }
+    }
+
+    private func restartListener() {
+        listener?.cancel()
+        listener = nil
+        listenerHealthy = false
+        startListener()
+    }
+
+    private func startListener() {
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
@@ -89,6 +143,7 @@ final class PhoneReceiver: ObservableObject {
             conn.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
+                    self?.lastDataReceived = Date()
                     self?.setConnected(true)
                     self?.sendHello(on: conn)
                 case .failed, .cancelled:
@@ -100,13 +155,48 @@ final class PhoneReceiver: ObservableObject {
             self.receive(on: conn)
         }
         listener?.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
             switch state {
-            case .ready: self?.setStatus("Listening on :\(port)")
-            case .failed(let error): self?.setStatus("Listener failed: \(error.localizedDescription)")
+            case .ready:
+                self.listenerHealthy = true
+                self.setStatus("Listening on :\(self.port)")
+            case .failed(let error):
+                Log.info("listener failed: \(error) — restarting in 1s")
+                self.listenerHealthy = false
+                self.setStatus("Listener failed — restarting…")
+                self.queue.asyncAfter(deadline: .now() + 1) { self.restartListener() }
+            case .cancelled:
+                self.listenerHealthy = false
             default: break
             }
         }
         listener?.start(queue: queue)
+    }
+
+    // MARK: - Liveness (ping + watchdog)
+
+    private func schedulePing() {
+        queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self else { return }
+            if self.connection?.state == .ready {
+                self.sendControl(["type": "ping"])
+            }
+            self.schedulePing()
+        }
+    }
+
+    private func scheduleWatchdog() {
+        queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self else { return }
+            if let conn = self.connection, conn.state == .ready,
+               Date().timeIntervalSince(self.lastDataReceived) > 5 {
+                Log.info("watchdog: nothing from the Mac for >5s — dropping connection")
+                conn.cancel()
+                self.connection = nil
+                self.setConnected(false)
+            }
+            self.scheduleWatchdog()
+        }
     }
 
     private func resetStreamState() {
@@ -114,6 +204,9 @@ final class PhoneReceiver: ObservableObject {
         formatDesc = nil
         sps = nil
         pps = nil
+        lastFrameAt = nil
+        frameIntervals.removeAll()
+        decodeFlushes = 0
         displayLayer.flush()
     }
 
@@ -157,6 +250,8 @@ final class PhoneReceiver: ObservableObject {
             [weak self] data, _, isComplete, error in
             guard let self else { return }
             if let data, !data.isEmpty {
+                self.lastDataReceived = Date()
+                self.bytesThisWindow += data.count
                 self.buffer.append(data)
                 self.drainFrames()
             }
@@ -319,17 +414,43 @@ final class PhoneReceiver: ObservableObject {
 
         if displayLayer.status == .failed {
             Log.info("display layer failed (\(String(describing: displayLayer.error))) — flushing")
+            decodeFlushes += 1
             displayLayer.flush()
         }
         displayLayer.enqueue(sample)
 
+        // Per-frame timing for the performance overlay.
+        let now = Date()
+        if let last = lastFrameAt {
+            let ms = now.timeIntervalSince(last) * 1000
+            frameIntervals.append(ms)
+            if frameIntervals.count > maxSamples { frameIntervals.removeFirst() }
+            if ms > 50 { stallsThisWindow += 1 }
+        }
+        lastFrameAt = now
+
         framesThisWindow += 1
-        let elapsed = Date().timeIntervalSince(fpsWindowStart)
+        let elapsed = now.timeIntervalSince(fpsWindowStart)
         if elapsed >= 1.0 {
             let fps = Int(Double(framesThisWindow) / elapsed)
+            var stats = PerfStats()
+            stats.fps = fps
+            stats.mbps = Double(bytesThisWindow) * 8 / elapsed / 1_000_000
+            stats.samples = frameIntervals
+            if !frameIntervals.isEmpty {
+                stats.avgFrameMs = frameIntervals.reduce(0, +) / Double(frameIntervals.count)
+                stats.maxFrameMs = frameIntervals.max() ?? 0
+            }
+            stats.stalls = stallsThisWindow
+            stats.decodeFlushes = decodeFlushes
             framesThisWindow = 0
-            fpsWindowStart = Date()
-            DispatchQueue.main.async { self.fps = fps }
+            bytesThisWindow = 0
+            stallsThisWindow = 0
+            fpsWindowStart = now
+            DispatchQueue.main.async {
+                self.fps = fps
+                self.perf = stats
+            }
         }
     }
 

@@ -57,12 +57,29 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stopped = false
 
     private var lastHello: PhoneInfo?
-    private var helloContinuation: CheckedContinuation<PhoneInfo, Never>?
+    private var helloContinuation: CheckedContinuation<PhoneInfo, Error>?
     private var inputInjector: InputInjector?
+
+    // Liveness: both sides ping every 2s; if nothing arrives for 5s the link
+    // is half-open (e.g. iproxy accepted but the device is gone) — reconnect.
+    private var lastReceived = Date()
+    private static let pingFrame: Data = {
+        let payload = try! JSONSerialization.data(withJSONObject: ["type": "ping"])
+        var header = UInt32(payload.count).bigEndian
+        var frame = Data(bytes: &header, count: 4)
+        frame.append(payload)
+        return frame
+    }()
 
     private var framesSent = 0
     private var bytesSent = 0
     private var statsWindowStart = Date()
+
+    // ScreenCaptureKit emits frames only when content changes. After a
+    // reconnect on a static screen there is nothing to hang the forced
+    // keyframe on — so keep the last frame around and re-encode it.
+    private var lastPixelBuffer: CVPixelBuffer?
+    private var lastCaptureAt = Date.distantPast
 
     init(endpoint: NWEndpoint, name: String, mode: CaptureMode) {
         self.endpoint = endpoint
@@ -76,6 +93,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     func start() async throws {
         stopped = false
         connect()
+        schedulePing()
+        scheduleWatchdog()
 
         // Screen Recording permission: preflight, request if missing, and poll
         // until granted (the user flips the toggle in System Settings).
@@ -103,7 +122,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
         case .extend:
             await status("Waiting for phone hello…")
-            let info = await waitForHello()
+            let info = try await waitForHello()
             try await setupExtend(info)
 
             // Touch back-channel (Milestone 3). Needs Accessibility trust;
@@ -230,6 +249,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if let encoder { VTCompressionSessionInvalidate(encoder) }
         encoder = nil
         virtualDisplay = nil   // releasing it removes the display
+        queue.async { [weak self] in
+            // Unblock a start() that is still waiting for the hello.
+            self?.helloContinuation?.resume(throwing: CancellationError())
+            self?.helloContinuation = nil
+        }
+    }
+
+    /// Drop the current connection and dial again — fresh TCP through the
+    /// tunnel, fresh accept on the phone. Bound to the UI Reconnect button.
+    func forceReconnect() {
+        queue.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            Log.info("manual reconnect requested")
+            self.scheduleReconnect()
+        }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -253,6 +287,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("connection ready to \(self.endpointName)")
                 self.connectionReady = true
                 self.needsKeyframe = true   // new peer needs SPS/PPS + IDR
+                self.lastReceived = Date()  // fresh grace period for the watchdog
                 self.receiveControl(on: conn)
                 Task { await self.status("Connected to \(self.endpointName)") }
             case .failed(let error):
@@ -278,11 +313,45 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func scheduleReconnect() {
         guard !stopped else { return }
+        connectionReady = false
         connection?.cancel()
         connection = nil
         pendingSends = 0
         queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.connect()
+        }
+    }
+
+    // MARK: - Liveness (ping + watchdog)
+
+    private func schedulePing() {
+        queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self, !self.stopped else { return }
+            if self.connectionReady {
+                self.connection?.send(content: Self.pingFrame,
+                                      completion: .contentProcessed { _ in })
+            }
+            self.schedulePing()
+        }
+    }
+
+    private func scheduleWatchdog() {
+        queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self, !self.stopped else { return }
+            if self.connectionReady, Date().timeIntervalSince(self.lastReceived) > 5 {
+                Log.info("watchdog: nothing from the phone for >5s — reconnecting")
+                Task { await self.status("Connection stale — reconnecting…") }
+                self.scheduleReconnect()
+            }
+            // A reconnect on a static screen produces no capture frames, so
+            // the receiver would stay black — replay the last frame as IDR.
+            if self.connectionReady, self.needsKeyframe,
+               Date().timeIntervalSince(self.lastCaptureAt) > 1,
+               let pixelBuffer = self.lastPixelBuffer {
+                Log.info("static screen after reconnect — replaying last frame as keyframe")
+                self.encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()))
+            }
+            self.scheduleWatchdog()
         }
     }
 
@@ -302,12 +371,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func handleControl(_ payload: Data) {
+        lastReceived = Date()
         guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let type = obj["type"] as? String else {
             Log.info("unparseable control message (\(payload.count) bytes)")
             return
         }
         switch type {
+        case "ping":
+            break   // liveness only — lastReceived already updated
         case "hello":
             if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {
                 let previous = lastHello
@@ -344,9 +416,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    private func waitForHello() async -> PhoneInfo {
+    private func waitForHello() async throws -> PhoneInfo {
         if let lastHello { return lastHello }
-        return await withCheckedContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 if let hello = self.lastHello {
                     continuation.resume(returning: hello)
@@ -395,8 +467,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 of type: SCStreamOutputType) {
         guard type == .screen,
               CMSampleBufferIsValid(sampleBuffer),
-              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let encoder else { return }
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
+        else { return }
+
+        lastPixelBuffer = pixelBuffer
+        lastCaptureAt = Date()
 
         // No receiver, or the socket is backed up: skip this frame entirely.
         guard connectionReady else { return }
@@ -405,13 +480,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             return
         }
 
+        encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+    }
+
+    private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime) {
+        guard let encoder else { return }
         var frameProperties: CFDictionary?
         if needsKeyframe {
             frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
             needsKeyframe = false
         }
-
-        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         VTCompressionSessionEncodeFrame(
             encoder,
             imageBuffer: pixelBuffer,
