@@ -1,19 +1,77 @@
 import SwiftUI
 import Network
 
+/// How the app presents itself. One bundle, switched at runtime via the
+/// activation policy — like Raycast/Hammerspoon style background agents.
+enum AppPresentation: String, CaseIterable {
+    case menuBar, dock, background
+
+    var label: String {
+        switch self {
+        case .menuBar: return "Menu bar"
+        case .dock: return "Dock"
+        case .background: return "Background only"
+        }
+    }
+}
+
 @main
 struct OpenSidecarMacApp: App {
-    @StateObject private var controller = SenderController()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var controller = SenderController.shared
 
     var body: some Scene {
-        // Background utility: lives in the menu bar, no Dock icon (LSUIElement).
-        MenuBarExtra {
+        MenuBarExtra(isInserted: Binding(
+            get: { controller.presentation == .menuBar },
+            set: { _ in }
+        )) {
             ContentView(controller: controller)
         } label: {
             Image(systemName: controller.running
                   ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let presentation = SenderController.shared.presentation
+        NSApp.setActivationPolicy(presentation == .dock ? .regular : .accessory)
+        if presentation != .menuBar {
+            MainWindow.show()
+        }
+    }
+
+    // Background/Dock modes: opening the app again (Spotlight, Finder, Dock
+    // click) brings up the control window — Hammerspoon-style.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows: Bool) -> Bool {
+        MainWindow.show()
+        return false
+    }
+}
+
+/// The control panel as a regular window, for Dock/background presentation.
+@MainActor
+enum MainWindow {
+    private static var window: NSWindow?
+
+    static func show() {
+        if window == nil {
+            let w = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 440, height: 540),
+                styleMask: [.titled, .closable, .miniaturizable],
+                backing: .buffered, defer: false)
+            w.title = "OpenSidecar"
+            w.contentView = NSHostingView(
+                rootView: ContentView(controller: SenderController.shared))
+            w.isReleasedWhenClosed = false
+            w.center()
+            window = w
+        }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
@@ -34,6 +92,19 @@ enum ConnectionTarget: Hashable {
 
 @MainActor
 final class SenderController: ObservableObject {
+    static let shared = SenderController()
+
+    @Published var presentation = AppPresentation(
+        rawValue: UserDefaults.standard.string(forKey: "presentation") ?? "") ?? .menuBar {
+        didSet {
+            UserDefaults.standard.set(presentation.rawValue, forKey: "presentation")
+            NSApp.setActivationPolicy(presentation == .dock ? .regular : .accessory)
+            // Never strand the user without UI: leaving menu-bar mode opens
+            // the window immediately.
+            if presentation != .menuBar { MainWindow.show() }
+        }
+    }
+
     @Published var status = "Idle"
     @Published var framesSent = 0
     @Published var mbps = 0.0
@@ -265,6 +336,19 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Show app in", selection: $controller.presentation) {
+                        ForEach(AppPresentation.allCases, id: \.self) { p in
+                            Text(p.label).tag(p)
+                        }
+                    }
+                    if controller.presentation == .background {
+                        Text("No menu bar or Dock icon — streaming keeps running. Open the OpenSidecar app again (Spotlight/Finder) to show this window.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 LabeledContent("Display layout") {
                     Button("Arrange Displays…") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension") {
@@ -300,9 +384,9 @@ struct ContentView: View {
                 }
             }
             .formStyle(.grouped)
-            .scrollDisabled(true)
-
-            Spacer(minLength: 0)
+            // Scrollable + fixed panel height: MenuBarExtra windows mis-measure
+            // grouped Forms (clipping on small displays), so size explicitly
+            // and let the form scroll when it doesn't fit.
 
             Divider()
 
@@ -326,7 +410,7 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
-        .frame(width: 440)
+        .frame(width: 440, height: 540)
     }
 
     @ViewBuilder
