@@ -1,0 +1,511 @@
+// MacSender — captures a display, H.264-encodes it, streams it to the phone.
+//
+// Milestone 1 (mirror):  capture the main display.
+// Milestone 2 (extend):  create a CGVirtualDisplay sized to the phone panel
+//                        (announced by the phone in a "hello" message) and
+//                        capture that — macOS gains a true second monitor.
+//
+// Pipeline:  ScreenCaptureKit -> VideoToolbox (H.264) -> framed TCP
+// Roles: the PHONE listens, the MAC connects (required for usbmux/USB).
+//
+// Wire protocol, Mac -> phone:   [4-byte big-endian length][Annex B payload]
+//   (keyframes prefixed with SPS+PPS, NALUs delimited by 00 00 00 01)
+// Wire protocol, phone -> Mac:   [4-byte big-endian length][JSON message]
+//   e.g. {"type":"hello","pixelsWide":2556,"pixelsHigh":1179,"scale":3}
+
+import ScreenCaptureKit
+import VideoToolbox
+import Network
+import CoreMedia
+import AppKit
+
+enum CaptureMode: String {
+    case mirror   // main display (Milestone 1)
+    case extend   // virtual display (Milestone 2)
+}
+
+struct PhoneInfo: Decodable {
+    let pixelsWide: Int   // landscape-oriented (long edge)
+    let pixelsHigh: Int
+    let scale: Double
+}
+
+@available(macOS 14.0, *)
+final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
+
+    // Status surfaced to the UI (updated on main thread).
+    @MainActor var onStatus: ((String) -> Void)?
+    @MainActor var onStats: ((Int, Double) -> Void)?   // framesSent, mbps
+
+    private var stream: SCStream?
+    private var encoder: VTCompressionSession?
+    private var connection: NWConnection?
+    private var virtualDisplay: VirtualDisplay?
+    private let queue = DispatchQueue(label: "sender.video")
+    private let startCode: [UInt8] = [0, 0, 0, 1]
+
+    private let endpoint: NWEndpoint
+    private let endpointName: String
+    private let mode: CaptureMode
+
+    // Backpressure: outstanding sends. If the socket can't keep up we drop
+    // frames instead of queueing latency, then force a keyframe to resync.
+    private var pendingSends = 0
+    private let maxPendingSends = 6
+    private var needsKeyframe = true
+    private var connectionReady = false
+    private var stopped = false
+
+    private var lastHello: PhoneInfo?
+    private var helloContinuation: CheckedContinuation<PhoneInfo, Never>?
+    private var inputInjector: InputInjector?
+
+    private var framesSent = 0
+    private var bytesSent = 0
+    private var statsWindowStart = Date()
+
+    init(endpoint: NWEndpoint, name: String, mode: CaptureMode) {
+        self.endpoint = endpoint
+        self.endpointName = name
+        self.mode = mode
+        super.init()
+    }
+
+    // MARK: - Lifecycle
+
+    func start() async throws {
+        stopped = false
+        connect()
+
+        // Screen Recording permission: preflight, request if missing, and poll
+        // until granted (the user flips the toggle in System Settings).
+        if !CGPreflightScreenCaptureAccess() {
+            await status("Waiting for Screen Recording permission…")
+            CGRequestScreenCaptureAccess()
+            Log.info("Screen Recording permission missing — requested, polling for grant")
+            while !CGPreflightScreenCaptureAccess() {
+                try await Task.sleep(for: .seconds(2))
+                if stopped { return }
+            }
+            Log.info("Screen Recording permission granted")
+        }
+
+        switch mode {
+        case .mirror:
+            let content = try await SCShareableContent.current
+            guard let display = content.displays.first else {
+                throw NSError(domain: "MacSender", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "no displays found"])
+            }
+            // SCDisplay reports points; capture at point resolution for M1.
+            try await startCapture(display: display,
+                                   pixelsWide: display.width, pixelsHigh: display.height)
+
+        case .extend:
+            await status("Waiting for phone hello…")
+            let info = await waitForHello()
+            try await setupExtend(info)
+
+            // Touch back-channel (Milestone 3). Needs Accessibility trust;
+            // the prompt fires once and we keep going — touches start working
+            // the moment the user grants it.
+            if !InputInjector.ensureAccessibilityPermission() {
+                await status("Extending — grant Accessibility for touch input")
+                // Event posting is trust-checked per-post, so it starts working
+                // the moment the user grants — poll just to log/report it.
+                while !AXIsProcessTrusted() {
+                    try await Task.sleep(for: .seconds(2))
+                    if stopped { return }
+                }
+                Log.info("Accessibility permission granted — touch input live")
+            }
+        }
+    }
+
+    /// Build (or rebuild) the virtual display + capture for the announced
+    /// phone dimensions. Called at startup and again whenever the phone
+    /// rotates (it re-sends hello with swapped dimensions).
+    private func setupExtend(_ info: PhoneInfo) async throws {
+        Log.info("phone hello: \(info.pixelsWide)x\(info.pixelsHigh) @\(info.scale)x")
+
+        // Phone panel is @3x; the virtual display runs @2x HiDPI, so points
+        // = native pixels / 2 (rounded down to even for the encoder).
+        let pointsWide = (info.pixelsWide / 2) & ~1
+        let pointsHigh = (info.pixelsHigh / 2) & ~1
+        // Rough physical size so macOS picks a sane default UI scale.
+        let mm = info.pixelsWide >= info.pixelsHigh
+            ? CGSize(width: 147, height: 68)
+            : CGSize(width: 68, height: 147)
+
+        let vd = await MainActor.run {
+            VirtualDisplay(name: "OpenSidecar",
+                           pointsWide: pointsWide, pointsHigh: pointsHigh,
+                           sizeInMillimeters: mm)
+        }
+        guard let vd else {
+            throw NSError(domain: "MacSender", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplay creation failed"])
+        }
+        virtualDisplay = vd
+        inputInjector = InputInjector(displayID: vd.displayID)
+
+        let display = try await findSCDisplay(id: vd.displayID)
+        try await startCapture(display: display,
+                               pixelsWide: pointsWide * 2, pixelsHigh: pointsHigh * 2)
+    }
+
+    /// Tear down and rebuild when the phone announces new dimensions. Loops
+    /// until the built display matches the latest hello, so rotations that
+    /// arrive mid-rebuild aren't lost (and rapid flip-flops settle once).
+    private var reconfiguring = false
+    private func reconfigure(_ info: PhoneInfo) async {
+        guard !reconfiguring, !stopped else { return }
+        reconfiguring = true
+        defer { reconfiguring = false }
+        var target = info
+        while !stopped {
+            Log.info("reconfiguring for \(target.pixelsWide)x\(target.pixelsHigh)")
+            if let stream { try? await stream.stopCapture() }
+            stream = nil
+            if let encoder { VTCompressionSessionInvalidate(encoder) }
+            encoder = nil
+            virtualDisplay = nil   // removes the old display
+            needsKeyframe = true
+            do {
+                try await setupExtend(target)
+            } catch {
+                Log.info("reconfigure failed: \(error)")
+                await status("Rotation failed: \(error.localizedDescription)")
+                return
+            }
+            if let latest = lastHello,
+               latest.pixelsWide != target.pixelsWide || latest.pixelsHigh != target.pixelsHigh {
+                target = latest   // rotated again while we were rebuilding
+                continue
+            }
+            return
+        }
+    }
+
+    /// The virtual display takes a moment to show up in shareable content.
+    private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
+        for _ in 0..<20 {
+            let content = try await SCShareableContent.current
+            if let display = content.displays.first(where: { $0.displayID == id }) {
+                return display
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        throw NSError(domain: "MacSender", code: 3,
+                      userInfo: [NSLocalizedDescriptionKey: "virtual display never appeared in SCShareableContent"])
+    }
+
+    private func startCapture(display: SCDisplay, pixelsWide: Int, pixelsHigh: Int) async throws {
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+
+        let config = SCStreamConfiguration()
+        config.width = pixelsWide
+        config.height = pixelsHigh
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.queueDepth = 5
+        config.showsCursor = true
+
+        setupEncoder(width: pixelsWide, height: pixelsHigh)
+
+        let stream = SCStream(filter: filter, configuration: config, delegate: self)
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        try await stream.startCapture()
+        self.stream = stream
+        Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) mode \(mode.rawValue)")
+        await status("\(mode == .extend ? "Extending" : "Mirroring") \(pixelsWide)×\(pixelsHigh)")
+    }
+
+    func stop() {
+        stopped = true
+        stream?.stopCapture { _ in }
+        stream = nil
+        connection?.cancel()
+        connection = nil
+        if let encoder { VTCompressionSessionInvalidate(encoder) }
+        encoder = nil
+        virtualDisplay = nil   // releasing it removes the display
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        Log.info("stream stopped with error: \(error)")
+        Task { await status("Capture stopped: \(error.localizedDescription)") }
+    }
+
+    // MARK: - Connection (with retry)
+
+    private func connect() {
+        guard !stopped else { return }
+        let options = NWProtocolTCP.Options()
+        options.noDelay = true   // latency matters more than throughput here
+        let params = NWParameters(tls: nil, tcp: options)
+        let conn = NWConnection(to: endpoint, using: params)
+        connection = conn
+        conn.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                Log.info("connection ready to \(self.endpointName)")
+                self.connectionReady = true
+                self.needsKeyframe = true   // new peer needs SPS/PPS + IDR
+                self.receiveControl(on: conn)
+                Task { await self.status("Connected to \(self.endpointName)") }
+            case .failed(let error):
+                Log.info("connection failed: \(error)")
+                self.connectionReady = false
+                self.scheduleReconnect()
+            case .waiting(let error):
+                // On loopback there is no "path change" to wake us up again
+                // (e.g. iproxy not started yet) — treat waiting as failure
+                // and poll by reconnecting.
+                Log.info("connection waiting: \(error) — will retry")
+                self.connectionReady = false
+                Task { await self.status("Waiting for receiver at \(self.endpointName)…") }
+                self.scheduleReconnect()
+            case .cancelled:
+                self.connectionReady = false
+            default:
+                break
+            }
+        }
+        conn.start(queue: queue)
+    }
+
+    private func scheduleReconnect() {
+        guard !stopped else { return }
+        connection?.cancel()
+        connection = nil
+        pendingSends = 0
+        queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.connect()
+        }
+    }
+
+    // MARK: - Control messages (phone -> Mac)
+
+    private func receiveControl(on conn: NWConnection) {
+        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
+            guard let self, error == nil, let data, data.count == 4 else { return }
+            let len = Int(UInt32(bigEndian: data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
+            guard len > 0, len < 1 << 20 else { return }
+            conn.receive(minimumIncompleteLength: len, maximumLength: len) { [weak self] payload, _, _, error in
+                guard let self, error == nil, let payload, payload.count == len else { return }
+                self.handleControl(payload)
+                self.receiveControl(on: conn)
+            }
+        }
+    }
+
+    private func handleControl(_ payload: Data) {
+        guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let type = obj["type"] as? String else {
+            Log.info("unparseable control message (\(payload.count) bytes)")
+            return
+        }
+        switch type {
+        case "hello":
+            if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {
+                let previous = lastHello
+                lastHello = info
+                if let continuation = helloContinuation {
+                    helloContinuation = nil
+                    continuation.resume(returning: info)
+                } else if mode == .extend, stream != nil, let previous,
+                          previous.pixelsWide != info.pixelsWide
+                          || previous.pixelsHigh != info.pixelsHigh {
+                    // Phone rotated — rebuild after a short debounce so a
+                    // flurry of orientation flips settles into one rebuild.
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(300))
+                        guard let current = self.lastHello,
+                              current.pixelsWide == info.pixelsWide,
+                              current.pixelsHigh == info.pixelsHigh else { return }
+                        await self.reconfigure(info)
+                    }
+                }
+            }
+        case "touch":
+            if let phase = obj["phase"] as? String,
+               let x = obj["x"] as? Double,
+               let y = obj["y"] as? Double {
+                inputInjector?.handleTouch(phase: phase, x: x, y: y)
+            }
+        case "scroll":
+            if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
+                inputInjector?.handleScroll(dx: dx, dy: dy)
+            }
+        default:
+            Log.info("unknown control message type: \(type)")
+        }
+    }
+
+    private func waitForHello() async -> PhoneInfo {
+        if let lastHello { return lastHello }
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                if let hello = self.lastHello {
+                    continuation.resume(returning: hello)
+                } else {
+                    self.helloContinuation = continuation
+                }
+            }
+        }
+    }
+
+    // MARK: - Encoder setup
+
+    private func setupEncoder(width: Int, height: Int) {
+        VTCompressionSessionCreate(
+            allocator: nil,
+            width: Int32(width), height: Int32(height),
+            codecType: kCMVideoCodecType_H264,
+            encoderSpecification: nil,
+            imageBufferAttributes: nil,
+            compressedDataAllocator: nil,
+            outputCallback: nil,
+            refcon: nil,
+            compressionSessionOut: &encoder
+        )
+        guard let encoder else {
+            Log.info("FATAL: VTCompressionSessionCreate failed")
+            return
+        }
+        // Low-latency settings: real-time, no B-frames, periodic keyframes.
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 120 as CFNumber)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 2 as CFNumber)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: 15_000_000 as CFNumber)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
+        VTCompressionSessionPrepareToEncodeFrames(encoder)
+        Log.info("encoder ready: \(width)x\(height) H.264 15Mbps")
+    }
+
+    // MARK: - Capture callback
+
+    func stream(_ stream: SCStream,
+                didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+                of type: SCStreamOutputType) {
+        guard type == .screen,
+              CMSampleBufferIsValid(sampleBuffer),
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+              let encoder else { return }
+
+        // No receiver, or the socket is backed up: skip this frame entirely.
+        guard connectionReady else { return }
+        if pendingSends > maxPendingSends {
+            needsKeyframe = true   // dropped frames break the P-frame chain
+            return
+        }
+
+        var frameProperties: CFDictionary?
+        if needsKeyframe {
+            frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
+            needsKeyframe = false
+        }
+
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        VTCompressionSessionEncodeFrame(
+            encoder,
+            imageBuffer: pixelBuffer,
+            presentationTimeStamp: pts,
+            duration: .invalid,
+            frameProperties: frameProperties,
+            infoFlagsOut: nil
+        ) { [weak self] status, _, buffer in
+            guard status == noErr, let buffer, let self else { return }
+            if let data = self.annexB(from: buffer) { self.sendFramed(data) }
+        }
+    }
+
+    // MARK: - H.264 -> Annex B
+
+    private func annexB(from sample: CMSampleBuffer) -> Data? {
+        guard let block = CMSampleBufferGetDataBuffer(sample) else { return nil }
+        var len = 0, total = 0
+        var ptr: UnsafeMutablePointer<Int8>?
+        guard CMBlockBufferGetDataPointer(block, atOffset: 0,
+                lengthAtOffsetOut: &len, totalLengthOut: &total,
+                dataPointerOut: &ptr) == noErr, let ptr else { return nil }
+
+        var out = Data(capacity: total + 128)
+        // On keyframes, prepend SPS/PPS (they live in the format description).
+        if isKeyframe(sample), let fmt = CMSampleBufferGetFormatDescription(sample) {
+            for i in 0..<2 {           // index 0 = SPS, 1 = PPS
+                var psPtr: UnsafePointer<UInt8>?
+                var psLen = 0
+                if CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                        fmt, parameterSetIndex: i,
+                        parameterSetPointerOut: &psPtr,
+                        parameterSetSizeOut: &psLen,
+                        parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr,
+                   let psPtr {
+                    out.append(contentsOf: startCode)
+                    out.append(Data(bytes: psPtr, count: psLen))
+                }
+            }
+        }
+        // Convert AVCC (4-byte length-prefixed NALUs) to Annex B start codes.
+        let raw = UnsafeRawPointer(ptr)
+        var offset = 0
+        while offset + 4 <= total {
+            var nalLen: UInt32 = 0
+            memcpy(&nalLen, raw + offset, 4)
+            nalLen = CFSwapInt32BigToHost(nalLen)
+            offset += 4
+            guard offset + Int(nalLen) <= total else { break }
+            out.append(contentsOf: startCode)
+            out.append(Data(bytes: raw + offset, count: Int(nalLen)))
+            offset += Int(nalLen)
+        }
+        return out
+    }
+
+    private func isKeyframe(_ sample: CMSampleBuffer) -> Bool {
+        guard let arr = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false),
+              let dict = (arr as? [[CFString: Any]])?.first else { return true }
+        return !(dict[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
+    }
+
+    // MARK: - Wire framing: [4-byte big-endian length][payload]
+
+    private func sendFramed(_ payload: Data) {
+        guard let connection, connectionReady else { return }
+        var header = UInt32(payload.count).bigEndian
+        var frame = Data(bytes: &header, count: 4)
+        frame.append(payload)
+        pendingSends += 1
+        connection.send(content: frame, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            self.pendingSends -= 1
+            if let error {
+                Log.info("send error: \(error)")
+                return
+            }
+            self.framesSent += 1
+            self.bytesSent += frame.count
+            // Report stats roughly once a second.
+            let elapsed = Date().timeIntervalSince(self.statsWindowStart)
+            if elapsed >= 1.0 {
+                let mbps = Double(self.bytesSent) * 8 / elapsed / 1_000_000
+                let frames = self.framesSent
+                self.bytesSent = 0
+                self.statsWindowStart = Date()
+                Task { @MainActor in self.onStats?(frames, mbps) }
+            }
+        })
+    }
+
+    // MARK: - Helpers
+
+    private func status(_ text: String) async {
+        await MainActor.run { onStatus?(text) }
+    }
+}
