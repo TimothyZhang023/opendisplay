@@ -4,11 +4,12 @@
 
 # OpenSidecar
 
-**Use your iPhone or iPad as a second monitor for your Mac — free, open source, no subscription.**
+**Turn your spare Apple devices into second monitors for your Mac — free, open source, no subscription.**
 
-A self-hosted alternative to Apple Sidecar, Duet Display, and Luna Display.
-True extended display (not just mirroring), Retina-sharp, over USB or WiFi,
-with touch and scroll input.
+iPhone and iPad today, spare MacBooks on the roadmap. A self-hosted
+alternative to Apple Sidecar, Duet Display, and Luna Display: true extended
+display (not just mirroring), Retina-sharp, over USB or WiFi, with touch and
+scroll input.
 
 [Website](https://peetzweg.github.io/opensidecar/) · [Quick start](#quick-start) · [How it works](#how-it-works) · [FAQ](#faq) · [Contributing](#contributing)
 
@@ -235,6 +236,7 @@ Tracked as [roadmap issues](https://github.com/peetzweg/opensidecar/issues?q=is%
 - [#9](https://github.com/peetzweg/opensidecar/issues/9) Resolution & quality settings
 - [#10](https://github.com/peetzweg/opensidecar/issues/10) HEVC encoding
 - [#12](https://github.com/peetzweg/opensidecar/issues/12) Audio forwarding
+- [#17](https://github.com/peetzweg/opensidecar/issues/17) macOS receiver — use another Mac as a display
 
 **Experience**
 - [#11](https://github.com/peetzweg/opensidecar/issues/11) Menu bar app mode with auto-connect
