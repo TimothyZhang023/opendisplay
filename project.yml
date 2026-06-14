@@ -1,6 +1,15 @@
 name: OpenSidecar
 options:
   createIntermediateGroups: true
+schemes:
+  OpenSidecarMac:
+    build:
+      targets:
+        OpenSidecarMac: all
+  OpenSidecariOS:
+    build:
+      targets:
+        OpenSidecariOS: all
 # DEVELOPMENT_TEAM comes from the environment (see generate.sh / .env) so no
 # personal team ID lives in the repo. Unset = unsigned, fine for CI.
 settings:
