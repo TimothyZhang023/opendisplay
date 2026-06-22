@@ -30,7 +30,7 @@
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
     "description": "Free, open-source alternative to Apple Sidecar and Duet Display: use spare Apple devices (iPhone, iPad) as true extended displays for a Mac over USB or WiFi.",
     "url": "https://peetzweg.github.io/opensidecar/",
-    "downloadUrl": "https://github.com/peetzweg/opensidecar",
+    "downloadUrl": "https://github.com/peetzweg/opensidecar/releases/latest",
     "license": "https://www.gnu.org/licenses/gpl-3.0.html"
   }
   </script>
@@ -39,207 +39,459 @@
   <style>
     :root {
       --bg: #ffffff;
-      --bg2: #f5f5f7;
-      --fg: #1d1d1f;
-      --muted: #6e6e73;
-      --accent: #0071e3;
-      --accent2: #0a84ff;
-      --card: #f5f5f7;
-      --border: #d2d2d7;
+      --fg: #111111;
+      --muted: #666666;
+      --faint: #999999;
+      --line: #e5e5e5;
+      --line-strong: #111111;
+      --maxw: 1040px;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; }
+    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg); color: var(--fg); line-height: 1.6;
+      background: var(--bg); color: var(--fg); line-height: 1.55;
+      font-size: 16px; -webkit-font-smoothing: antialiased;
     }
-    .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
-    header { padding: 96px 0 64px; text-align: center;
-      background: linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%); }
-    header img.logo { width: 112px; height: 112px; margin-bottom: 24px; }
-    h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.15; letter-spacing: -0.02em; }
-    h1 em { font-style: normal; color: var(--accent); }
-    .tagline { font-size: 1.2rem; color: var(--muted); max-width: 640px; margin: 20px auto 36px; }
-    .cta { display: inline-block; padding: 13px 28px; border-radius: 980px; font-weight: 600;
-      text-decoration: none; margin: 0 8px 12px; }
-    .cta.primary { background: var(--accent); color: #fff; }
-    .cta.primary:hover { background: var(--accent2); }
-    .cta.secondary { border: 1px solid var(--border); color: var(--accent); }
-    .badges { color: var(--muted); font-size: 0.9rem; margin-top: 12px; }
-    section { padding: 56px 0; }
-    h2 { font-size: 1.8rem; margin-bottom: 24px; letter-spacing: -0.01em; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-    .card { background: var(--card); border-radius: 14px; padding: 22px; }
-    .card h3 { font-size: 1.05rem; margin-bottom: 8px; }
-    .card p { color: var(--muted); font-size: 0.95rem; }
-    pre { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
-      padding: 20px; overflow-x: auto; font-size: 0.85rem; line-height: 1.5; color: var(--fg); }
-    code { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
-    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
-    th { color: var(--muted); font-weight: 600; }
-    td:first-child { color: var(--muted); }
-    .yes { color: #248a3d; } .no { color: #d70015; }
-    details { background: var(--card); border-radius: 12px;
-      padding: 16px 20px; margin-bottom: 12px; }
-    summary { cursor: pointer; font-weight: 600; }
-    details p { color: var(--muted); margin-top: 10px; }
-    footer { padding: 48px 0 64px; text-align: center; color: var(--muted); font-size: 0.9rem;
-      border-top: 1px solid var(--border); }
-    footer a { color: var(--accent); }
-    a { color: var(--accent); }
+    .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+    a { color: var(--fg); text-decoration: underline; text-underline-offset: 2px;
+        text-decoration-thickness: 1px; text-decoration-color: var(--line-strong); }
+    a:hover { text-decoration-thickness: 2px; }
+
+    /* ---- top nav ---- */
+    nav { border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 10; }
+    nav .wrap { display: flex; align-items: center; justify-content: space-between;
+      height: 60px; }
+    nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 600;
+      letter-spacing: -0.01em; text-decoration: none; }
+    nav .brand img { width: 26px; height: 26px; }
+    nav .links { display: flex; gap: 22px; font-size: 0.9rem; }
+    nav .links a { text-decoration: none; color: var(--muted); }
+    nav .links a:hover { color: var(--fg); }
+    nav .links a.gh { display: inline-flex; align-items: center; gap: 6px; }
+    nav .gh-logo { width: 16px; height: 16px; fill: currentColor; display: block; }
+    nav .gh-stars { font-variant-numeric: tabular-nums; }
+    @media (max-width: 680px) { nav .links { display: none; } }
+
+    /* ---- section scaffolding ---- */
+    section { border-top: 1px solid var(--line); }
+    section:first-of-type { border-top: 0; }
+    .sec { padding: 84px 0; }
+    .eyebrow { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.14em;
+      text-transform: uppercase; color: var(--faint); margin-bottom: 20px; }
+    h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); line-height: 1.04;
+      letter-spacing: -0.035em; font-weight: 600; }
+    h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.02em;
+      font-weight: 600; }
+
+    /* ---- hero ---- */
+    .hero { padding: 92px 0 84px; }
+    .hero h1 { max-width: 16ch; }
+    .hero h1 .u { text-decoration: underline; text-decoration-thickness: 2px;
+      text-underline-offset: 6px; }
+    .hero .tagline { font-size: 1.15rem; color: var(--muted); max-width: 64ch;
+      margin: 26px 0 0; }
+    .meta { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
+      margin-top: 18px; letter-spacing: 0.02em; }
+    .hero-support { margin-top: 16px; }
+    .hero-support a { font-size: 0.9rem; color: var(--muted); text-decoration-color: var(--line); }
+    .hero-support a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
+
+    /* ---- download blocks ---- */
+    .needs-both { margin-top: 44px; color: var(--muted); font-size: 0.98rem; }
+    .needs-both strong { color: var(--fg); }
+    .downloads { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+      margin-top: 18px; border: 1px solid var(--line); }
+    .downloads > div { padding: 28px; }
+    .downloads > div + div { border-left: 1px solid var(--line); }
+    @media (max-width: 720px) {
+      .downloads { grid-template-columns: 1fr; }
+      .downloads > div + div { border-left: 0; border-top: 1px solid var(--line); }
+    }
+    .dl-head { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--faint); margin-bottom: 6px;
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .dl-head .step { color: var(--fg); border: 1px solid var(--line-strong); border-radius: 3px;
+      padding: 2px 7px; letter-spacing: 0.06em; }
+    .dl-head .ver { color: var(--fg); text-transform: none; letter-spacing: 0; }
+    .dl-sub { color: var(--muted); font-size: 0.86rem; margin-bottom: 18px; }
+
+    .btn { display: inline-flex; align-items: center; gap: 8px; font: inherit;
+      font-weight: 600; font-size: 0.95rem; padding: 12px 22px; border-radius: 3px;
+      text-decoration: none; border: 1px solid var(--line-strong); cursor: pointer; }
+    .btn.primary { background: var(--fg); color: var(--bg); }
+    .btn.primary:hover { background: #000; }
+    .btn.ghost { background: transparent; color: var(--fg); }
+    .btn.ghost:hover { background: var(--fg); color: var(--bg); }
+    .note { font-size: 0.84rem; color: var(--muted); margin-top: 14px; line-height: 1.5; }
+    .note a { color: var(--muted); text-decoration-color: var(--line); }
+    .sub { display: block; font-size: 0.84rem; color: var(--muted); margin-top: 12px; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+
+    /* App Store / TestFlight cluster */
+    .ios-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+    .badge-wrap { display: inline-flex; flex-direction: column; gap: 4px; }
+    .appstore-badge { height: 44px; width: auto; display: block; }
+    .badge-wrap.disabled .appstore-badge { opacity: 0.32; filter: grayscale(1); }
+    .badge-wrap .cap { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--faint); }
+    .btn.disabled { opacity: 0.5; cursor: not-allowed; border-style: dashed; }
+
+    /* ---- feature grid ---- */
+    .fgrid { display: grid; grid-template-columns: repeat(3, 1fr);
+      border-top: 1px solid var(--line); border-left: 1px solid var(--line);
+      margin-top: 36px; }
+    .fcell { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+      padding: 24px; }
+    .fcell .n { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
+      display: block; margin-bottom: 12px; }
+    .fcell h3 { font-size: 1.02rem; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
+    .fcell p { color: var(--muted); font-size: 0.92rem; }
+    @media (max-width: 860px) { .fgrid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 560px) { .fgrid { grid-template-columns: 1fr; } }
+
+    /* ---- "why" comparison rows ---- */
+    .compare { border-top: 1px solid var(--line); margin-top: 28px; }
+    .compare .row { display: grid; grid-template-columns: 150px 1fr; gap: 24px;
+      padding: 22px 0; border-bottom: 1px solid var(--line); align-items: start; }
+    .compare .row p { color: var(--muted); max-width: 80ch; }
+    .compare .row .name { font-weight: 600; color: var(--fg); }
+    .compare .row.highlight { border: 2px solid var(--line-strong); border-radius: 4px;
+      background: #fafafa; padding: 22px; margin-top: 10px; }
+    @media (max-width: 560px) { .compare .row { grid-template-columns: 1fr; gap: 6px; } }
+    .tbl-head { margin: 48px 0 16px; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
+
+    /* ---- code ---- */
+    pre { border: 1px solid var(--line); border-radius: 3px; padding: 20px;
+      overflow-x: auto; font-size: 0.84rem; line-height: 1.55; background: #fafafa;
+      margin-top: 8px; }
+    code { font-family: var(--mono); }
+    p code { font-size: 0.88em; background: #f2f2f2; padding: 1px 5px; border-radius: 3px; }
+
+    /* ---- comparison table ---- */
+    .tbl-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 3px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; min-width: 660px; }
+    th, td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--line);
+      vertical-align: top; }
+    th:first-child, td:first-child { white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    thead th { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--faint); font-weight: 600; }
+    tbody td:first-child { color: var(--muted); }
+    .mark-yes { color: var(--fg); font-weight: 600; }
+    .mark-no { color: var(--faint); }
+    /* highlight the OpenSidecar column */
+    th.os, td.os { border-left: 2px solid var(--line-strong); border-right: 2px solid var(--line-strong);
+      background: #fafafa; }
+    thead th.os { border-top: 2px solid var(--line-strong); color: var(--fg); }
+    tbody tr:last-child td.os { border-bottom: 2px solid var(--line-strong); }
+
+    /* ---- FAQ ---- */
+    .faq { border-top: 1px solid var(--line); }
+    details { border-bottom: 1px solid var(--line); }
+    summary { cursor: pointer; font-weight: 600; padding: 22px 0; list-style: none;
+      display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; font-family: var(--mono); color: var(--faint);
+      font-weight: 400; font-size: 1.2rem; }
+    details[open] summary::after { content: "–"; }
+    details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
+
+    /* ---- support / ko-fi ---- */
+    .support { text-align: center; }
+    .support h2 { max-width: 22ch; margin: 0 auto; }
+    .support p { color: var(--muted); max-width: 62ch; margin: 20px auto 30px; }
+
+    /* ---- footer ---- */
+    footer { border-top: 1px solid var(--line); padding: 48px 0 64px;
+      color: var(--muted); font-size: 0.9rem; }
+    footer .links { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 14px; }
+    footer .links a { color: var(--muted); text-decoration-color: var(--line); }
+    footer .fine { color: var(--faint); font-size: 0.84rem; }
   </style>
 </head>
 <body>
 
-<header>
+<nav>
   <div class="wrap">
-    <img class="logo" src="icon-256.png" alt="OpenSidecar icon — a Mac display extending onto an iPhone" />
-    <h1>Your spare Apple device is your Mac's <em>second monitor</em>.</h1>
+    <a class="brand" href="/">
+      <img src="icon-256.png" alt="" /> OpenSidecar
+    </a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#contribute">Contribute</a>
+      <a href="#why">Compare</a>
+      <a href="#faq">FAQ</a>
+      <a href="#support">Support</a>
+      <a class="gh" href="https://github.com/peetzweg/opensidecar" title="Star OpenSidecar on GitHub">
+        <svg class="gh-logo" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="gh-stars" id="gh-stars" hidden><span id="gh-star-count"></span></span>
+      </a>
+    </div>
+  </div>
+</nav>
+
+<section>
+  <div class="wrap hero">
+    <p class="eyebrow">Free &amp; open source · macOS + iOS</p>
+    <h1>Your iPhone or iPad is your Mac's <span class="u">second monitor</span>.</h1>
     <p class="tagline">
-      OpenSidecar is a free, open-source alternative to Apple Sidecar, Duet Display and
-      Luna Display. iPhone and iPad today — spare MacBooks on the roadmap. A true extended
-      display, not a mirror: USB or WiFi, Retina-sharp, with touch and scroll.
-      No subscription. No dongle. No account.
+      A free, open-source alternative to Apple Sidecar, Duet Display and Luna Display.
+      Use your iPhone and iPad as a second — and even a third — screen for your Mac.
+      A true extended display, not a mirror: USB or WiFi, Retina-sharp, with touch and
+      scroll. No subscription. No dongle. No account.
     </p>
-    <a class="cta primary" href="https://github.com/peetzweg/opensidecar">Get it on GitHub</a>
-    <a class="cta secondary" href="#quickstart">Quick start</a>
-    <div class="badges">macOS 14+ · iOS 17+ · GPL-3.0 licensed · 100% self-hosted</div>
-  </div>
-</header>
+    <p class="meta">macOS 14+ &nbsp;·&nbsp; iOS 17+ &nbsp;·&nbsp; GPL-3.0 &nbsp;·&nbsp; 100% self-hosted</p>
+    <p class="hero-support"><a href="#support">Like it? Support the project →</a></p>
 
-<section>
-  <div class="wrap">
-    <h2>Why another screen-extension app?</h2>
-    <div class="grid">
-      <div class="card"><h3>Apple Sidecar</h3><p>Free, but iPad-only, requires both devices on the same Apple&nbsp;ID, and only on blessed hardware pairs. iPhones need not apply.</p></div>
-      <div class="card"><h3>Duet Display</h3><p>Pioneered the idea — now behind a subscription.</p></div>
-      <div class="card"><h3>Luna Display</h3><p>Great latency, but you're buying a hardware dongle.</p></div>
-      <div class="card"><h3>OpenSidecar</h3><p>Free, open source, auditable. The device you already own becomes a real second display. If you were about to build your own — contribute here instead.</p></div>
+    <p class="needs-both">OpenSidecar is <strong>two apps that work together</strong> — install both to get going.</p>
+    <div class="downloads">
+      <div>
+        <div class="dl-head"><span class="step">Step 1</span> On your Mac <span class="ver" id="mac-ver"></span></div>
+        <p class="dl-sub">The sender — captures a virtual display and streams it.</p>
+        <a class="btn primary" id="mac-dl"
+           href="https://github.com/peetzweg/opensidecar/releases/latest/download/OpenSidecar-macOS.zip">
+          Download for Mac
+        </a>
+        <p class="note">
+          Unsigned build — on first launch, right-click the app ▸ <strong>Open</strong> to get
+          past Gatekeeper. Prefer to compile it yourself?
+          <a href="https://github.com/peetzweg/opensidecar#quick-start">Build from source ↗</a>
+        </p>
+      </div>
+      <div>
+        <div class="dl-head"><span class="step">Step 2</span> On your iPhone &amp; iPad</div>
+        <p class="dl-sub">The receiver — displays the stream and sends touch back.</p>
+        <div class="ios-row">
+          <!-- TODO: when the App Store listing is live, wrap this badge in <a href="…"> and
+               remove class "disabled" + the "Coming soon" caption. -->
+          <span class="badge-wrap disabled" title="Coming soon to the App Store">
+            <img class="appstore-badge" src="app-store-badge.svg" alt="Download on the App Store" width="120" height="40" />
+            <span class="cap">Coming soon</span>
+          </span>
+        </div>
+        <!-- TODO: replace the #testflight href with the public TestFlight invite link
+             (e.g. https://testflight.apple.com/join/XXXXXXXX), then drop the onclick and "(soon)". -->
+        <p class="sub">
+          <a id="testflight" href="#" onclick="return false;" title="TestFlight invite link coming soon">Join the TestFlight beta (soon)</a>,<br>
+          or get started now by
+          <a href="https://github.com/peetzweg/opensidecar#quick-start">compiling it from source ↗</a>.
+        </p>
+      </div>
     </div>
   </div>
 </section>
 
-<section>
-  <div class="wrap">
-    <h2>Features</h2>
-    <div class="grid">
-      <div class="card"><h3>🖥️ True extension</h3><p>macOS treats your phone as a real monitor via a virtual display — arrange it in System Settings, drag windows onto it. Mirroring also available.</p></div>
-      <div class="card"><h3>🔌 USB-wired, lowest latency</h3><p>Streams over your charging cable via usbmux. No network, no jitter, and your phone charges while it works.</p></div>
-      <div class="card"><h3>📶 WiFi, zero config</h3><p>The phone advertises itself with Bonjour; pick it from a dropdown. No IP addresses.</p></div>
-      <div class="card"><h3>🔍 Retina sharp</h3><p>The virtual display matches your device panel pixel-for-pixel at HiDPI (@2x). Text looks like it should.</p></div>
-      <div class="card"><h3>👆 Touch &amp; scroll</h3><p>Tap to click, drag to drag, two-finger pan to scroll. A tiny touchscreen for your Mac.</p></div>
-      <div class="card"><h3>🔄 Portrait mode</h3><p>Rotate the phone and the virtual display rebuilds as a vertical monitor — perfect for chat, logs, or documentation.</p></div>
-      <div class="card"><h3>⚡ Low-latency pipeline</h3><p>Hardware H.264 (VideoToolbox real-time mode), TCP_NODELAY, frame-dropping backpressure with instant keyframe recovery.</p></div>
-      <div class="card"><h3>🔒 Private by design</h3><p>One direct TCP connection between your devices. No servers, no accounts, no telemetry. Read the code.</p></div>
+<section id="support">
+  <div class="wrap sec support">
+    <p class="eyebrow">Support the project</p>
+    <h2>If OpenSidecar saved you a monitor, consider buying me a coffee.</h2>
+    <p>
+      Free, open source, and funded out of my own pocket — including the Apple Developer
+      membership behind signed, one-click installs. If it helps you, a tip keeps it going.
+    </p>
+    <a class="btn primary" href="https://ko-fi.com/peetzweg">Support on Ko-fi</a>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap sec">
+    <p class="eyebrow">Features</p>
+    <h2>A true extended display, the way it should be.</h2>
+    <div class="fgrid">
+      <div class="fcell"><span class="n">001</span><h3>True extension</h3><p>macOS treats your phone as a real monitor via a virtual display — arrange it in System Settings, drag windows onto it. Mirroring is available too.</p></div>
+      <div class="fcell"><span class="n">002</span><h3>USB-wired, lowest latency</h3><p>Streams over your charging cable via usbmux. No network, no jitter — and your phone charges while it works.</p></div>
+      <div class="fcell"><span class="n">003</span><h3>WiFi, zero config</h3><p>The phone advertises itself with Bonjour; pick it from a dropdown. No IP addresses to type.</p></div>
+      <div class="fcell"><span class="n">004</span><h3>Retina sharp</h3><p>The virtual display matches your device panel pixel-for-pixel at HiDPI (@2x). Text looks like it should.</p></div>
+      <div class="fcell"><span class="n">005</span><h3>Touch &amp; scroll</h3><p>Tap to click, drag to drag, two-finger pan to scroll. A tiny touchscreen for your Mac.</p></div>
+      <div class="fcell"><span class="n">006</span><h3>Portrait mode</h3><p>Rotate the phone and the virtual display rebuilds as a vertical monitor — perfect for chat, logs, or docs.</p></div>
+      <div class="fcell"><span class="n">007</span><h3>Low-latency pipeline</h3><p>Hardware H.264 (VideoToolbox real-time mode), TCP_NODELAY, frame-dropping backpressure with instant keyframe recovery.</p></div>
+      <div class="fcell"><span class="n">008</span><h3>Private by design</h3><p>One direct TCP connection between your devices. No servers, no accounts, no telemetry. Read the code.</p></div>
+      <div class="fcell"><span class="n">009</span><h3>No account, ever</h3><p>No sign-up, no email, no login — and no Apple ID pairing. Download both apps and go. Most alternatives make you register first.</p></div>
     </div>
   </div>
 </section>
 
-<section id="quickstart">
-  <div class="wrap">
-    <h2>Quick start</h2>
-    <p style="color: var(--muted); margin-bottom: 16px;">
-      Two small apps, built from source with standard Apple tooling: a Mac app
-      (captures &amp; sends) and an iOS app (receives &amp; displays).
+<section id="contribute">
+  <div class="wrap sec">
+    <p class="eyebrow">Contribute</p>
+    <h2>Open source, and built in the open.</h2>
+    <p style="color: var(--muted); max-width: 72ch; margin-top: 8px;">
+      OpenSidecar is GPL-3.0 and developed entirely on GitHub — the whole stack, from Mac
+      capture and H.264 encoding to the iOS receiver, is yours to read, build, and improve.
+      Bug reports, feature ideas, and pull requests are all welcome. Build-and-run instructions
+      live in the README.
     </p>
-    <pre><code>brew install xcodegen
-git clone https://github.com/peetzweg/opensidecar.git
-cd opensidecar &amp;&amp; xcodegen generate
-# build &amp; run both targets from Xcode, then:
-./run.sh   # starts the USB tunnel + Mac app</code></pre>
-    <p style="color: var(--muted); margin-top: 16px;">
-      Grant <strong>Screen Recording</strong> and <strong>Accessibility</strong> once,
-      and drag a window onto your new display. Full instructions in the
-      <a href="https://github.com/peetzweg/opensidecar#quick-start">README</a>.
+    <div class="btn-row">
+      <a class="btn primary" href="https://github.com/peetzweg/opensidecar">View on GitHub ↗</a>
+      <a class="btn ghost" href="https://github.com/peetzweg/opensidecar/issues">Open an issue ↗</a>
+    </div>
+    <p class="sub">
+      New here? Start with the
+      <a href="https://github.com/peetzweg/opensidecar#quick-start">README quick-start</a>
+      to build both apps, or browse the
+      <a href="https://github.com/peetzweg/opensidecar/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22">good first issues</a>.
     </p>
   </div>
 </section>
 
-<section>
-  <div class="wrap">
-    <h2>Comparison</h2>
-    <table>
-      <tr><th></th><th>OpenSidecar</th><th>Apple Sidecar</th><th>Duet</th><th>Luna</th></tr>
-      <tr><td>Price</td><td class="yes">Free &amp; open source</td><td>Free</td><td class="no">Subscription</td><td class="no">$$$ + dongle</td></tr>
-      <tr><td>iPhone as display</td><td class="yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-      <tr><td>Different Apple IDs</td><td class="yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-      <tr><td>Wired USB</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td></tr>
-      <tr><td>Self-hosted / auditable</td><td class="yes">✓</td><td>—</td><td class="no">✗</td><td class="no">✗</td></tr>
-    </table>
+<section id="why">
+  <div class="wrap sec">
+    <p class="eyebrow">Why OpenSidecar</p>
+    <h2>The device you already own becomes a real additional display.</h2>
+    <div class="compare">
+      <div class="row">
+        <div class="name"><a href="https://support.apple.com/en-us/HT210380">Apple Sidecar</a></div>
+        <p>Free, but iPad-only, requires both devices on the same Apple&nbsp;ID, and only on
+        blessed hardware pairs. iPhones need not apply.</p>
+      </div>
+      <div class="row">
+        <div class="name"><a href="https://www.duetdisplay.com/">Duet Display</a></div>
+        <p>Pioneered the idea — now behind a subscription.</p>
+      </div>
+      <div class="row">
+        <div class="name"><a href="https://astropad.com/product/lunadisplay/">Luna Display</a></div>
+        <p>Great latency, but you're buying a hardware dongle.</p>
+      </div>
+      <div class="row highlight">
+        <div class="name">OpenSidecar</div>
+        <p>Free, open source, auditable. The device you already own becomes a real additional
+        display. If you were about to build your own — contribute here instead.</p>
+      </div>
+    </div>
+
+    <h3 class="tbl-head">How it stacks up</h3>
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr><th></th><th class="os">OpenSidecar</th><th>Apple Sidecar</th><th>Duet</th><th>Luna</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Price</td><td class="mark-yes os">Free &amp; open source</td><td>Free</td><td class="mark-no">Subscription</td><td class="mark-no">$$$ + dongle</td></tr>
+          <tr><td>iPhone as display</td><td class="mark-yes os">✓</td><td class="mark-no">✕</td><td class="mark-yes">✓</td><td class="mark-yes">✓</td></tr>
+          <tr><td>Different Apple IDs</td><td class="mark-yes os">✓</td><td class="mark-no">✕</td><td class="mark-yes">✓</td><td class="mark-yes">✓</td></tr>
+          <tr><td>No account / sign-up</td><td class="mark-yes os">✓</td><td>Apple&nbsp;ID</td><td class="mark-no">✕</td><td>—</td></tr>
+          <tr><td>Wired USB</td><td class="mark-yes os">✓</td><td class="mark-yes">✓</td><td class="mark-yes">✓</td><td class="mark-no">✕</td></tr>
+          <tr><td>Self-hosted / auditable</td><td class="mark-yes os">✓</td><td>—</td><td class="mark-no">✕</td><td class="mark-no">✕</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 
-<section>
-  <div class="wrap">
-    <h2>FAQ</h2>
-    <details>
-      <summary>How does it actually work?</summary>
-      <p>The Mac creates a virtual display with the private <code>CGVirtualDisplay</code> API
-      (the same technique used by BetterDisplay and DeskPad), captures it with
-      ScreenCaptureKit, hardware-encodes H.264 with VideoToolbox, and streams it
-      over a single TCP connection — through the USB cable via usbmux, or over WiFi.
-      The phone decodes and renders with <code>AVSampleBufferDisplayLayer</code> and sends
-      touch coordinates back, which the Mac injects as mouse events.</p>
-    </details>
-    <details>
-      <summary>Why isn't this on the App Store?</summary>
-      <p><code>CGVirtualDisplay</code> is a private API. That's the deal: every
-      virtual-display product either uses it or ships a dongle. Building from
-      source with your own (free) Apple developer account takes a few minutes.</p>
-    </details>
-    <details>
-      <summary>Why do I see the purple screen-recording indicator on my Mac?</summary>
-      <p>macOS shows that privacy indicator for <em>every</em> app that captures the
-      screen — Duet, Luna, OBS and Zoom included. Apple Sidecar avoids it only
-      because it's built into the OS. It's a feature, not a bug: you always know
-      a capture is running.</p>
-    </details>
-    <details>
-      <summary>WiFi mode can't find my iPhone — why?</summary>
-      <p>WiFi discovery needs the <strong>Local Network</strong> permission on
-      <em>both</em> sides, and macOS/iOS deny it silently if the prompt was missed:
-      check System Settings → Privacy &amp; Security → Local Network on the Mac,
-      and Settings → Privacy &amp; Security → Local Network on the iPhone. Both
-      devices must be on the same WiFi and the iPhone app must be open. The Mac
-      app shows a live permission panel, and the iPhone app has a settings screen
-      (shake the phone) that links straight there. USB mode needs none of this.</p>
-    </details>
-    <details>
-      <summary>iPad support?</summary>
-      <p>The receiver is a universal iOS app — it runs on iPad today. iPad-specific
-      features (Apple Pencil, pressure) are on the roadmap.</p>
-    </details>
-    <details>
-      <summary>Is any of my screen data sent to a server?</summary>
-      <p>No. One direct TCP connection between your Mac and your device. No accounts,
-      no analytics, no cloud. The full story — what the apps store locally, which
-      permissions they use and why, and the one current caveat about unencrypted
-      WiFi transport — is on the <a href="privacy.html">privacy page</a>.</p>
-    </details>
-    <details>
-      <summary>What's the license? Can I fork it or use it commercially?</summary>
-      <p>OpenSidecar is licensed under <a href="https://github.com/peetzweg/opensidecar/blob/main/LICENSE">GPL-3.0</a>.
-      You can use, study, and adapt it freely — including commercially. If you
-      distribute a modified version, it must remain open source under the same
-      license with the original attribution intact, so improvements flow back to
-      everyone instead of into closed forks. (Releases up to v0.4.x were
-      MIT-licensed and remain available under those terms.)</p>
-    </details>
+<section id="faq">
+  <div class="wrap sec">
+    <p class="eyebrow">FAQ</p>
+    <h2>Questions, answered.</h2>
+    <div class="faq">
+      <details>
+        <summary>How does it actually work?</summary>
+        <p>The Mac creates a virtual display with the private <code>CGVirtualDisplay</code> API
+        (the same technique used by BetterDisplay and DeskPad), captures it with ScreenCaptureKit,
+        hardware-encodes H.264 with VideoToolbox, and streams it over a single TCP connection —
+        through the USB cable via usbmux, or over WiFi. The phone decodes and renders with
+        <code>AVSampleBufferDisplayLayer</code> and sends touch coordinates back, which the Mac
+        injects as mouse events.</p>
+      </details>
+      <details>
+        <summary>Why isn't this on the App Store yet?</summary>
+        <p><code>CGVirtualDisplay</code> is a private API. That's the deal: every
+        virtual-display product either uses it or ships a dongle. A TestFlight beta is coming;
+        in the meantime you can build from source with your own (free) Apple developer account in
+        a few minutes.</p>
+      </details>
+      <details>
+        <summary>Why do I see the purple screen-recording indicator on my Mac?</summary>
+        <p>macOS shows that privacy indicator for <em>every</em> app that captures the screen —
+        Duet, Luna, OBS and Zoom included. Apple Sidecar avoids it only because it's built into
+        the OS. It's a feature, not a bug: you always know a capture is running.</p>
+      </details>
+      <details>
+        <summary>WiFi mode can't find my iPhone — why?</summary>
+        <p>WiFi discovery needs the <strong>Local Network</strong> permission on <em>both</em>
+        sides, and macOS/iOS deny it silently if the prompt was missed: check System Settings →
+        Privacy &amp; Security → Local Network on the Mac, and Settings → Privacy &amp; Security →
+        Local Network on the iPhone. Both devices must be on the same WiFi and the iPhone app
+        must be open. The Mac app shows a live permission panel, and the iPhone app has a settings
+        screen (shake the phone) that links straight there. USB mode needs none of this.</p>
+      </details>
+      <details>
+        <summary>iPad support?</summary>
+        <p>The receiver is a universal iOS app — it runs on iPad today. Run the Mac, an iPhone
+        <em>and</em> an iPad at once for a second and a third screen. iPad-specific features
+        (Apple Pencil, pressure) are on the roadmap.</p>
+      </details>
+      <details>
+        <summary>Is any of my screen data sent to a server?</summary>
+        <p>No. One direct TCP connection between your Mac and your device. No accounts, no
+        analytics, no cloud. The full story — what the apps store locally, which permissions they
+        use and why, and the one current caveat about unencrypted WiFi transport — is on the
+        <a href="privacy.html">privacy page</a>.</p>
+      </details>
+      <details>
+        <summary>What's the license? Can I fork it or use it commercially?</summary>
+        <p>OpenSidecar is licensed under
+        <a href="https://github.com/peetzweg/opensidecar/blob/main/LICENSE">GPL-3.0</a>. You can
+        use, study, and adapt it freely — including commercially. If you distribute a modified
+        version, it must remain open source under the same license with the original attribution
+        intact, so improvements flow back to everyone instead of into closed forks. (Releases up
+        to v0.4.x were MIT-licensed and remain available under those terms.)</p>
+      </details>
+    </div>
   </div>
 </section>
 
 <footer>
   <div class="wrap">
-    <p>
-      <a href="https://github.com/peetzweg/opensidecar">GitHub</a> ·
-      <a href="https://github.com/peetzweg/opensidecar/issues">Issues</a> ·
-      <a href="privacy.html">Privacy</a> ·
+    <div class="links">
+      <a href="https://github.com/peetzweg/opensidecar">GitHub</a>
+      <a href="https://github.com/peetzweg/opensidecar/releases/latest">Releases</a>
+      <a href="https://github.com/peetzweg/opensidecar/issues">Issues</a>
+      <a href="https://ko-fi.com/peetzweg">Support / Ko-fi</a>
+      <a href="privacy.html">Privacy</a>
       <a href="https://github.com/peetzweg/opensidecar/blob/main/LICENSE">GPL-3.0 License</a>
-    </p>
-    <p style="margin-top: 8px;">OpenSidecar — use your iPhone or iPad as a second monitor for your Mac. Free forever.</p>
+    </div>
+    <p class="fine">OpenSidecar — use your iPhone or iPad as a second monitor for your Mac. Free forever.</p>
   </div>
 </footer>
+
+<script>
+  // Progressive enhancement: show the current release version next to the Mac download.
+  // Fails silent (offline / rate-limited) — the download button works without it.
+  (function () {
+    try {
+      fetch("https://api.github.com/repos/peetzweg/opensidecar/releases/latest", {
+        headers: { "Accept": "application/vnd.github+json" }
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (data && data.tag_name) {
+            var el = document.getElementById("mac-ver");
+            if (el) el.textContent = data.tag_name;
+          }
+        })
+        .catch(function () {});
+
+      // Live GitHub star count in the nav.
+      fetch("https://api.github.com/repos/peetzweg/opensidecar", {
+        headers: { "Accept": "application/vnd.github+json" }
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (data && typeof data.stargazers_count === "number") {
+            var count = document.getElementById("gh-star-count");
+            var wrap = document.getElementById("gh-stars");
+            if (count && wrap) {
+              count.textContent = data.stargazers_count.toLocaleString();
+              wrap.hidden = false;
+            }
+          }
+        })
+        .catch(function () {});
+    } catch (e) {}
+  })();
+</script>
 
 </body>
 </html>
