@@ -57,10 +57,10 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
    l1 stays on one line (nowrap) so the rotating word's width never pushes l2 around */
 .hero h1 .l1 { display: block; white-space: nowrap; }
 .hero h1 .l2 { display: block; }
-/* hand-drawn brush underline in brand blue (SVG stroke with a natural wobble) */
+/* straight brand-blue underline, thick with rounded tips */
 .hero h1 .u {
   text-decoration: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='18' viewBox='0 0 300 18' preserveAspectRatio='none'%3E%3Cpath d='M3,13.5 C90,9.5 200,7 297,3' fill='none' stroke='%230090fc' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='18' viewBox='0 0 300 18' preserveAspectRatio='none'%3E%3Cpath d='M4,9 L296,9' fill='none' stroke='%230090fc' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: left 100%;
   background-size: 100% 0.4em;
