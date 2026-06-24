@@ -57,8 +57,15 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
    l1 stays on one line (nowrap) so the rotating word's width never pushes l2 around */
 .hero h1 .l1 { display: block; white-space: nowrap; }
 .hero h1 .l2 { display: block; }
-.hero h1 .u { text-decoration: underline; text-decoration-thickness: 2px;
-  text-underline-offset: 6px; }
+/* hand-drawn brush underline in brand blue (SVG stroke with a natural wobble) */
+.hero h1 .u {
+  text-decoration: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='18' viewBox='0 0 300 18' preserveAspectRatio='none'%3E%3Cpath d='M4,11 C52,4 96,15 150,9 C206,4 252,15 296,8' fill='none' stroke='%230090fc' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 100%;
+  background-size: 100% 0.4em;
+  padding-bottom: 0.1em;
+}
 .hero .tagline { font-size: 1.15rem; color: var(--muted); max-width: 64ch;
   margin: 26px 0 0; }
 .meta { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
