@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/peetzweg/opendisplay/compare/v0.8.0...v0.9.0) (2026-06-30)
+
+
+### Features
+
+* rename app to OpenDisplay ([07d9962](https://github.com/peetzweg/opendisplay/commit/07d9962ef83ffab8628a263f978e98d5f1cd1d94))
+
 ## [0.8.0](https://github.com/peetzweg/opensidecar/compare/v0.7.2...v0.8.0) (2026-06-29)
 
 
