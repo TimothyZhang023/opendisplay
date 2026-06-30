@@ -66,7 +66,7 @@ No account or login is required.
 
 - [x] App renamed to OpenDisplay (code + metadata) — see PR for the rename
 - [x] Listing texts updated in App Store Connect
-- [ ] **Screenshots** re-exported: no "free"/price text, no "OpenSidecar"/"Sidecar" wording
+- [x] **Screenshots** re-exported: no "free"/price text, no "OpenSidecar"/"Sidecar" wording
 - [ ] **New build** uploaded (on-device name change needs a new binary) and selected for the version
 - [ ] **Demo video** recorded on a physical device and linked above + in App Review Information
 - [ ] **App Review Notes** filled in (companion Mac app + download link)
