@@ -169,8 +169,11 @@ jobs:
           mkdir -p public
           cp /tmp/appcast-updates/appcast.xml public/appcast.xml
           rm -f /tmp/sparkle_ed_priv
-          if ! git diff --quiet -- public/appcast.xml; then
-            git add public/appcast.xml
+          git add public/appcast.xml
+          # Compare the STAGED file: plain `git diff` ignores untracked files,
+          # so the first-ever appcast (a brand-new public/appcast.xml) looked
+          # "unchanged" and was never committed. `--cached` sees the staged add.
+          if ! git diff --cached --quiet -- public/appcast.xml; then
             git commit -m "chore(release): publish Sparkle appcast for ${TAG_NAME} [skip ci]"
             git push origin main
             # Pushes made with GITHUB_TOKEN do NOT trigger other workflows
