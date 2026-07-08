@@ -16,9 +16,9 @@ internal sealed class ReceiverForm : Form
 
     private Receiver? _receiver;
     private bool _fullscreen;
-    private FormBorderStyle _savedBorderStyle;
-    private FormWindowState _savedWindowState;
-    private Rectangle _savedBounds;
+    private FormBorderStyle _savedBorderStyle = FormBorderStyle.Sizable;
+    private FormWindowState _savedWindowState = FormWindowState.Normal;
+    private Rectangle _savedBounds = new(100, 100, 1120, 720);
     private bool _savedTopMost;
 
     public ReceiverForm(ReceiverOptions options)
@@ -36,6 +36,7 @@ internal sealed class ReceiverForm : Form
             Dock = DockStyle.Fill,
             BackColor = Color.Black,
         };
+        _videoPanel.DoubleClick += (_, _) => SetFullscreen(!_fullscreen);
 
         _statusLabel = new Label
         {
@@ -108,7 +109,7 @@ internal sealed class ReceiverForm : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (keyData is Keys.F11 or Keys.F)
+        if (keyData == Keys.F11 || keyData == Keys.F || keyData == (Keys.Alt | Keys.Enter))
         {
             SetFullscreen(!_fullscreen);
             return true;
@@ -151,7 +152,7 @@ internal sealed class ReceiverForm : Form
         Log($"Resolution    : {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x");
         Log($"Port          : {_options.Port}");
         Log($"ffplay        : {_options.FfplayPath}");
-        Log("Toggle fullscreen with F11 or F; exit fullscreen with Esc.");
+        Log("Toggle fullscreen with F11/F/double-click; exit fullscreen with Esc.");
         Log(string.Empty);
         Log("Connect from the Mac with:");
 
@@ -199,9 +200,10 @@ internal sealed class ReceiverForm : Form
         else
         {
             TopMost = _savedTopMost;
-            FormBorderStyle = _savedBorderStyle == 0 ? FormBorderStyle.Sizable : _savedBorderStyle;
-            WindowState = _savedWindowState == 0 ? FormWindowState.Normal : _savedWindowState;
-            Bounds = _savedBounds == Rectangle.Empty ? new Rectangle(100, 100, 1120, 720) : _savedBounds;
+            FormBorderStyle = _savedBorderStyle;
+            WindowState = FormWindowState.Normal;
+            Bounds = _savedBounds;
+            WindowState = _savedWindowState;
             _layout.RowStyles[0].Height = 48;
             _layout.RowStyles[2].Height = 130;
             _header.Visible = true;
@@ -215,7 +217,7 @@ internal sealed class ReceiverForm : Form
         if (IsDisposed) return;
         if (InvokeRequired)
         {
-            BeginInvoke(() => SetStatus(text));
+            BeginInvoke(new Action(() => SetStatus(text)));
             return;
         }
         _statusLabel.Text = text;
@@ -226,7 +228,7 @@ internal sealed class ReceiverForm : Form
         if (IsDisposed) return;
         if (InvokeRequired)
         {
-            BeginInvoke(() => Log(text));
+            BeginInvoke(new Action(() => Log(text)));
             return;
         }
         _logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {text}{Environment.NewLine}");
