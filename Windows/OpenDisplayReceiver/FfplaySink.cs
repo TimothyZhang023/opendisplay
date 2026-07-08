@@ -98,7 +98,7 @@ internal sealed class FfplaySink : IAsyncDisposable
             {
                 if (process.HasExited) return;
                 process.Refresh();
-                if (process.MainWindowHandle != 0)
+                if (process.MainWindowHandle != IntPtr.Zero)
                 {
                     AttachWindow(process.MainWindowHandle);
                     return;
@@ -144,7 +144,7 @@ internal sealed class FfplaySink : IAsyncDisposable
 
     private void FitToHost()
     {
-        if (_videoWindow == 0 || _host is null || _host.IsDisposed) return;
+        if (_videoWindow == IntPtr.Zero || _host is null || _host.IsDisposed) return;
         MoveWindow(_videoWindow, 0, 0, Math.Max(1, _host.ClientSize.Width), Math.Max(1, _host.ClientSize.Height), true);
     }
 
