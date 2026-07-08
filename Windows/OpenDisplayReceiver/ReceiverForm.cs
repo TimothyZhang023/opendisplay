@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Net;
 using System.Windows.Forms;
 
 namespace OpenDisplayReceiver;
@@ -12,9 +13,9 @@ internal sealed class ReceiverForm : Form
     private readonly Label _instructionsLabel = new();
     private readonly Button _copyMacCommandsButton = new();
     private readonly Button _toggleFullscreenButton = new();
-    private FormBorderStyle _previousBorderStyle;
-    private FormWindowState _previousWindowState;
-    private Rectangle _previousBounds;
+    private FormBorderStyle _previousBorderStyle = FormBorderStyle.Sizable;
+    private FormWindowState _previousWindowState = FormWindowState.Normal;
+    private Rectangle _previousBounds = Rectangle.Empty;
     private bool _controlWindowFullscreen;
 
     public ReceiverForm(ReceiverOptions options)
@@ -76,7 +77,7 @@ internal sealed class ReceiverForm : Form
             $"Receiver: {_options.DeviceName}\r\n" +
             $"Resolution announced to Mac: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x\r\n" +
             $"Listening port: {_options.Port}\r\n" +
-            $"Video window: {(_options.Fullscreen ? "fullscreen by default" : "windowed by default")} — press f inside the video window to toggle fullscreen.\r\n\r\n" +
+            $"Video window: {(_options.Fullscreen ? "fullscreen by default" : "windowed by default")} — press f in the video window to toggle fullscreen.\r\n\r\n" +
             "Run this on the Mac sender:\r\n" + commands;
         _instructionsLabel.AutoSize = true;
         _instructionsLabel.MaximumSize = new Size(790, 0);
@@ -162,8 +163,12 @@ internal sealed class ReceiverForm : Form
         {
             TopMost = false;
             FormBorderStyle = _previousBorderStyle;
+            WindowState = FormWindowState.Normal;
+            if (_previousBounds != Rectangle.Empty)
+            {
+                Bounds = _previousBounds;
+            }
             WindowState = _previousWindowState;
-            Bounds = _previousBounds;
             _controlWindowFullscreen = false;
         }
     }
