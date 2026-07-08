@@ -3,21 +3,33 @@ using System.ComponentModel;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Windows.Forms;
 
 namespace OpenDisplayReceiver;
 
 internal sealed class Receiver
 {
     private readonly ReceiverOptions _options;
+    private readonly Control? _videoHost;
+    private readonly Action<string> _log;
+    private readonly Action<string> _status;
     private CancellationTokenSource? _activeClient;
 
-    public Receiver(ReceiverOptions options) => _options = options;
+    public Receiver(ReceiverOptions options, Control? videoHost = null, Action<string>? log = null, Action<string>? status = null)
+    {
+        _options = options;
+        _videoHost = videoHost;
+        _log = log ?? Console.WriteLine;
+        _status = status ?? (_ => { });
+    }
 
     public async Task RunAsync(CancellationToken token)
     {
         var listener = new TcpListener(_options.BindAddress, _options.Port);
+        listener.Server.NoDelay = true;
         listener.Start();
-        Console.WriteLine($"Listening on {_options.BindAddress}:{_options.Port}");
+        Log($"Listening on {_options.BindAddress}:{_options.Port}");
+        _status($"Listening on :{_options.Port}");
 
         try
         {
@@ -25,7 +37,8 @@ internal sealed class Receiver
             {
                 var client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
                 client.NoDelay = true;
-                Console.WriteLine($"Accepted {client.Client.RemoteEndPoint}");
+                Log($"Accepted {client.Client.RemoteEndPoint}");
+                _status("Mac connected");
 
                 _activeClient?.Cancel();
                 _activeClient?.Dispose();
@@ -43,7 +56,7 @@ internal sealed class Receiver
 
     private async Task HandleClientAsync(TcpClient client, CancellationToken token)
     {
-        await using var ffplay = new FfplaySink(_options);
+        await using var ffplay = new FfplaySink(_options, _videoHost, Log);
         using var ownedClient = client;
         using var stream = ownedClient.GetStream();
         var sendLock = new SemaphoreSlim(1, 1);
@@ -59,19 +72,22 @@ internal sealed class Receiver
         }
         catch (OperationCanceledException)
         {
-            // Replaced by a newer connection or stopped by Ctrl+C.
+            // Replaced by a newer connection or app shutdown.
         }
         catch (EndOfStreamException)
         {
-            Console.WriteLine("Mac disconnected");
+            Log("Mac disconnected");
+            _status("Mac disconnected");
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
         {
-            Console.Error.WriteLine("ffplay.exe was not found. Install FFmpeg or pass --ffplay <path>.");
+            Log("ffplay.exe was not found. Use the packaged release zip or pass --ffplay <path>.");
+            _status("ffplay.exe not found");
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Connection failed: {ex.Message}");
+            Log($"Connection failed: {ex.Message}");
+            _status("Connection failed: " + ex.Message);
         }
     }
 
@@ -88,7 +104,7 @@ internal sealed class Receiver
             ["localCursor"] = false,
         };
         await SendControlAsync(stream, sendLock, hello, token).ConfigureAwait(false);
-        Console.WriteLine($"Sent hello: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x");
+        Log($"Sent hello: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x");
     }
 
     private static async Task PingLoopAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
@@ -122,22 +138,23 @@ internal sealed class Receiver
         }
     }
 
-    private static async Task ReadFramesAsync(Stream stream, FfplaySink ffplay, FrameStats stats, CancellationToken token)
+    private async Task ReadFramesAsync(Stream stream, FfplaySink ffplay, FrameStats stats, CancellationToken token)
     {
         var header = new byte[4];
         var announcedVideo = false;
 
         while (!token.IsCancellationRequested)
         {
-            await ReadExactAsync(stream, header.AsMemory(), token).ConfigureAwait(false);
-            var rawLen = BinaryPrimitives.ReadUInt32BigEndian(header);
-            if (rawLen == 0 || rawLen > 64u * 1024u * 1024u)
+            await ReadExactAsync(stream, header, token).ConfigureAwait(false);
+            var rawLength = BinaryPrimitives.ReadUInt32BigEndian(header);
+            if (rawLength == 0 || rawLength > 64 * 1024 * 1024)
             {
-                throw new InvalidDataException($"Invalid frame length: {rawLen}");
+                throw new InvalidDataException($"Invalid frame length: {rawLength}");
             }
+            var length = (int)rawLength;
 
-            var payload = new byte[(int)rawLen];
-            await ReadExactAsync(stream, payload.AsMemory(), token).ConfigureAwait(false);
+            var payload = new byte[length];
+            await ReadExactAsync(stream, payload, token).ConfigureAwait(false);
 
             if (IsPureJson(payload))
             {
@@ -155,12 +172,13 @@ internal sealed class Receiver
             if (!announcedVideo)
             {
                 announcedVideo = true;
-                Console.WriteLine("Receiving video");
+                Log("Receiving video");
+                _status("Receiving video");
             }
         }
     }
 
-    private static void HandleMacJson(byte[] payload)
+    private void HandleMacJson(byte[] payload)
     {
         try
         {
@@ -171,7 +189,7 @@ internal sealed class Receiver
             if (type == "pong" && doc.RootElement.TryGetProperty("t", out var tElement) && tElement.TryGetDouble(out var t))
             {
                 var rtt = Clock.NowMs - t;
-                if (rtt >= 0 && rtt < 2000) Console.WriteLine($"Control RTT {rtt:0} ms");
+                if (rtt >= 0 && rtt < 2000) Log($"Control RTT {rtt:0} ms");
             }
         }
         catch (JsonException)
@@ -189,8 +207,8 @@ internal sealed class Receiver
         await sendLock.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            await stream.WriteAsync(header.AsMemory(), token).ConfigureAwait(false);
-            await stream.WriteAsync(payload.AsMemory(), token).ConfigureAwait(false);
+            await stream.WriteAsync(header, token).ConfigureAwait(false);
+            await stream.WriteAsync(payload, token).ConfigureAwait(false);
             await stream.FlushAsync(token).ConfigureAwait(false);
         }
         finally
@@ -224,4 +242,6 @@ internal sealed class Receiver
         }
         return -1;
     }
+
+    private void Log(string message) => _log(message);
 }
