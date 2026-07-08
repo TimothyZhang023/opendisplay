@@ -3,6 +3,12 @@ using System.Net;
 
 namespace OpenDisplayReceiver;
 
+internal enum VideoRendererKind
+{
+    Native,
+    Ffplay,
+}
+
 internal sealed class ReceiverOptions
 {
     public int PixelsWide { get; init; } = 1920;
@@ -14,6 +20,8 @@ internal sealed class ReceiverOptions
     public string FfplayPath { get; init; } = ResolveDefaultFfplayPath();
     public bool Fullscreen { get; init; } = true;
     public bool EmbedVideo { get; init; } = true;
+    public bool EnableMdns { get; init; } = true;
+    public VideoRendererKind Renderer { get; init; } = VideoRendererKind.Native;
     public string InstallId { get; init; } = LoadOrCreateInstallId();
     public bool ShowHelp { get; init; }
 
@@ -25,10 +33,14 @@ internal sealed class ReceiverOptions
         "  --port 9000",
         "  --bind 0.0.0.0",
         "  --name \"Windows Display\"",
+        "  --renderer native|ffplay",
         "  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"",
         "  --fullscreen       Start fullscreen. This is the default.",
         "  --windowed         Start as a normal window.",
-        "  --no-embed         Let ffplay create its own window instead of embedding it.");
+        "  --no-embed         Let ffplay create its own window instead of embedding it.",
+        "  --no-mdns          Do not advertise _opensidecar._tcp over mDNS/Bonjour.");
+
+    public static void PrintHelp() => Console.WriteLine(HelpText);
 
     public static ReceiverOptions Parse(string[] args)
     {
@@ -42,6 +54,19 @@ internal sealed class ReceiverOptions
             if (arg is "-h" or "--help")
             {
                 flags.Add("--help");
+                continue;
+            }
+
+            if (arg is "--native" or "--renderer-native")
+            {
+                values["--renderer"] = "native";
+                continue;
+            }
+
+            if (arg is "--ffplay" && i + 1 >= args.Length)
+            {
+                values["--renderer"] = "ffplay";
+                flags.Add(arg);
                 continue;
             }
 
@@ -76,6 +101,8 @@ internal sealed class ReceiverOptions
             FfplayPath = ReadString(values, "--ffplay", defaults.FfplayPath),
             Fullscreen = flags.Contains("--fullscreen") || (!flags.Contains("--windowed") && defaults.Fullscreen),
             EmbedVideo = !flags.Contains("--no-embed"),
+            EnableMdns = !flags.Contains("--no-mdns"),
+            Renderer = ReadRenderer(values, defaults.Renderer),
             InstallId = defaults.InstallId,
             ShowHelp = flags.Contains("--help"),
         };
@@ -96,6 +123,17 @@ internal sealed class ReceiverOptions
 
     private static IPAddress ReadIPAddress(Dictionary<string, string> values, string key, IPAddress fallback) =>
         values.TryGetValue(key, out var raw) && IPAddress.TryParse(raw, out var address) ? address : fallback;
+
+    private static VideoRendererKind ReadRenderer(Dictionary<string, string> values, VideoRendererKind fallback)
+    {
+        if (!values.TryGetValue("--renderer", out var raw) || string.IsNullOrWhiteSpace(raw)) return fallback;
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "native" or "mf" or "mediafoundation" => VideoRendererKind.Native,
+            "ffplay" or "external" => VideoRendererKind.Ffplay,
+            _ => fallback,
+        };
+    }
 
     private static string ResolveDefaultFfplayPath()
     {
