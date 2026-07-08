@@ -43,12 +43,11 @@ Useful options:
 --port 9000
 --name "Windows Display"
 --ffplay "C:\ffmpeg\bin\ffplay.exe"
---fullscreen          # default: start the receiver window fullscreen
---windowed            # start as a normal window
---no-embed            # let ffplay create its own window instead of embedding it
+--fullscreen          # default: start the ffplay video window fullscreen
+--windowed            # start ffplay as a normal window
 ```
 
-Fullscreen controls: `F11`, `F`, or double-click toggles fullscreen; `Esc` exits fullscreen.
+Inside the ffplay video window, press `f` to toggle fullscreen.
 
 ## Connect from the Mac
 
@@ -113,7 +112,7 @@ Implemented:
 - Existing OpenDisplay length-prefixed frame protocol
 - `hello`, `ping`, `pong`, and periodic `stats` control messages
 - H.264 Annex B stream forwarding to bundled `ffplay`
-- Fullscreen receiver window by default, with `--windowed` opt-out
+- Fullscreen ffplay video window by default, with `--windowed` opt-out
 - Stable install id stored in `%APPDATA%\OpenDisplayReceiver\install-id.txt`
 - Manual Mac endpoint setup instructions printed at startup
 - CI-produced self-contained win-x64 exe zip
