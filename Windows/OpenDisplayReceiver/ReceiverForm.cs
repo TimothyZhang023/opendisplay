@@ -13,6 +13,7 @@ internal sealed class ReceiverForm : Form
     private readonly Label _instructionsLabel = new();
     private readonly Button _copyMacCommandsButton = new();
     private readonly Button _toggleFullscreenButton = new();
+    private readonly NativeVideoSurface _videoSurface = new();
     private FormBorderStyle _previousBorderStyle = FormBorderStyle.Sizable;
     private FormWindowState _previousWindowState = FormWindowState.Normal;
     private Rectangle _previousBounds = Rectangle.Empty;
@@ -22,23 +23,36 @@ internal sealed class ReceiverForm : Form
     {
         _options = options;
         Text = "OpenDisplay Receiver";
-        MinimumSize = new Size(720, 480);
-        Size = new Size(860, 620);
+        MinimumSize = new Size(900, 600);
+        Size = new Size(1120, 760);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
 
         BuildLayout();
 
-        Load += (_, _) => StartReceiver();
+        Load += (_, _) =>
+        {
+            StartReceiver();
+            if (_options.Fullscreen)
+            {
+                ToggleControlWindowFullscreen();
+            }
+        };
         FormClosing += (_, _) => _cts.Cancel();
         KeyDown += (_, e) =>
         {
-            if (e.KeyCode == Keys.F11 || (e.Alt && e.KeyCode == Keys.Enter))
+            if (e.KeyCode == Keys.F11 || e.KeyCode == Keys.F || (e.Alt && e.KeyCode == Keys.Enter))
+            {
+                ToggleControlWindowFullscreen();
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Escape && _controlWindowFullscreen)
             {
                 ToggleControlWindowFullscreen();
                 e.Handled = true;
             }
         };
+        _videoSurface.DoubleClick += (_, _) => ToggleControlWindowFullscreen();
     }
 
     private void BuildLayout()
@@ -47,7 +61,7 @@ internal sealed class ReceiverForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 6,
             Padding = new Padding(16),
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -55,6 +69,7 @@ internal sealed class ReceiverForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
         Controls.Add(root);
 
         var title = new Label
@@ -77,10 +92,11 @@ internal sealed class ReceiverForm : Form
             $"Receiver: {_options.DeviceName}\r\n" +
             $"Resolution announced to Mac: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x\r\n" +
             $"Listening port: {_options.Port}\r\n" +
-            $"Video window: {(_options.Fullscreen ? "fullscreen by default" : "windowed by default")} — press f in the video window to toggle fullscreen.\r\n\r\n" +
-            "Run this on the Mac sender:\r\n" + commands;
+            $"Renderer: {_options.Renderer}\r\n" +
+            $"Bonjour/mDNS: {(_options.EnableMdns ? "advertising _opensidecar._tcp" : "disabled")}\r\n\r\n" +
+            "Run this on the Mac sender if Bonjour discovery does not show it yet:\r\n" + commands;
         _instructionsLabel.AutoSize = true;
-        _instructionsLabel.MaximumSize = new Size(790, 0);
+        _instructionsLabel.MaximumSize = new Size(1050, 0);
         _instructionsLabel.Margin = new Padding(0, 0, 0, 12);
         root.Controls.Add(_instructionsLabel, 0, 2);
 
@@ -96,11 +112,14 @@ internal sealed class ReceiverForm : Form
         _copyMacCommandsButton.Click += (_, _) => Clipboard.SetText(commands);
         buttons.Controls.Add(_copyMacCommandsButton);
 
-        _toggleFullscreenButton.Text = "Toggle control window fullscreen (F11)";
+        _toggleFullscreenButton.Text = "Toggle fullscreen (F11 / F / double-click video)";
         _toggleFullscreenButton.AutoSize = true;
         _toggleFullscreenButton.Click += (_, _) => ToggleControlWindowFullscreen();
         buttons.Controls.Add(_toggleFullscreenButton);
         root.Controls.Add(buttons, 0, 3);
+
+        _videoSurface.Margin = new Padding(0, 0, 0, 8);
+        root.Controls.Add(_videoSurface, 0, 4);
 
         _logBox.Multiline = true;
         _logBox.ReadOnly = true;
@@ -108,16 +127,18 @@ internal sealed class ReceiverForm : Form
         _logBox.Dock = DockStyle.Fill;
         _logBox.Font = new Font(FontFamily.GenericMonospace, 9);
         _logBox.Margin = new Padding(0, 8, 0, 0);
-        root.Controls.Add(_logBox, 0, 4);
+        root.Controls.Add(_logBox, 0, 5);
     }
 
     private void StartReceiver()
     {
         AppendLog("OpenDisplay Receiver starting");
-        AppendLog($"ffplay: {_options.FfplayPath}");
+        AppendLog($"renderer: {_options.Renderer}");
+        AppendLog($"ffplay fallback: {_options.FfplayPath}");
+        AppendLog($"mDNS/Bonjour: {(_options.EnableMdns ? "enabled" : "disabled")}");
         AppendLog("Plain USB-C Mac-to-PC is not a supported transport because both sides are USB hosts. Use TCP over LAN or another real network interface.");
 
-        var receiver = new Receiver(_options, log: AppendLog, status: SetStatus);
+        var receiver = new Receiver(_options, _videoSurface, AppendLog, SetStatus);
         _ = Task.Run(async () =>
         {
             try
