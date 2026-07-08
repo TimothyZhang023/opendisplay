@@ -1,19 +1,24 @@
 # OpenDisplay Receiver for Windows
 
-This is a first Windows 10/11 x64 receiver for the existing OpenDisplay Mac sender protocol. It listens on TCP `:9000`, sends the same `hello` control message as the iOS receiver, keeps the Mac watchdog alive with `ping`, and pipes the Mac's low-latency H.264 Annex B stream into `ffplay`.
+This is a first Windows 10/11 x64 receiver for the existing OpenDisplay Mac sender protocol. It listens on TCP `:9000`, sends the same `hello` control message as the iOS receiver, keeps the Mac watchdog alive with `ping`, and displays the Mac's low-latency H.264 Annex B stream with a bundled `ffplay` runtime.
 
 The Mac is still the sender: it creates the virtual display with `CGVirtualDisplay`, captures it with ScreenCaptureKit, and streams H.264 frames over the existing length-prefixed TCP protocol.
 
 ## Requirements
 
 - Windows 10 or Windows 11, x64
-- FFmpeg with `ffplay.exe` available on `PATH`
 - Windows firewall access for TCP `9000` on private networks
 - .NET 8 SDK only when building from source; the CI artifact is self-contained
 
 ## Download / release artifact
 
-The `Windows receiver` workflow publishes a self-contained `OpenDisplayReceiver-win-x64.zip` artifact. The zip contains `OpenDisplayReceiver.exe` plus this README. `ffplay.exe` is still expected to be installed separately or passed with `--ffplay`.
+The `Windows receiver` workflow publishes `OpenDisplayReceiver-win-x64.zip`. The zip contains:
+
+- `OpenDisplayReceiver.exe` — self-contained win-x64 app
+- `ffplay.exe` and any FFmpeg runtime DLLs found on the runner
+- this README
+
+Unzip it and run `OpenDisplayReceiver.exe`.
 
 ## Build and run from source
 
@@ -23,7 +28,7 @@ From this directory:
 dotnet run -c Release -- --width 1920 --height 1080 --scale 2
 ```
 
-Create the same self-contained exe that CI publishes:
+Create the same self-contained exe shape that CI publishes:
 
 ```powershell
 dotnet publish . -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish\win-x64
@@ -38,9 +43,12 @@ Useful options:
 --port 9000
 --name "Windows Display"
 --ffplay "C:\ffmpeg\bin\ffplay.exe"
---fullscreen          # default: start the ffplay video window fullscreen
---windowed            # start as a normal window; press f in ffplay to toggle fullscreen
+--fullscreen          # default: start the receiver window fullscreen
+--windowed            # start as a normal window
+--no-embed            # let ffplay create its own window instead of embedding it
 ```
+
+Fullscreen controls: `F11`, `F`, or double-click toggles fullscreen; `Esc` exits fullscreen.
 
 ## Connect from the Mac
 
@@ -66,17 +74,19 @@ defaults delete com.peetzweg.opensidecar.mac host
 defaults delete com.peetzweg.opensidecar.mac port
 ```
 
-## USB / wired note
+## USB / usbmuxd note
 
-A passive USB-C cable between a Mac and a Windows PC is not enough for this receiver. Both machines are USB hosts, so there is no generic USB data pipe for an app or normal Windows driver to read. This receiver therefore treats wired connectivity as TCP over an actual network interface.
+A passive USB-C cable between a Mac and a Windows PC is not enough for this receiver. Both machines are USB hosts, so there is no generic USB data pipe for an app or normal Windows host driver to read.
 
-Working wired options:
+`usbmuxd` is the wrong layer for ordinary Mac-to-PC USB-C: it multiplexes connections over USB to an iOS device and exposes a host-side socket API. Porting that daemon to Windows still expects an Apple-style USB device on the other end; it does not make a Windows PC behave like an iPhone/iPad USB function.
+
+Working wired options remain:
 
 - Ethernet cable or USB-C Ethernet adapters on both machines.
 - A USB transfer / bridge cable that exposes a network interface or ships an SDK that can be integrated explicitly.
 - Hardware where the Windows side can really run USB device/gadget mode, which is uncommon on normal PCs.
 
-Plain USB-C without Thunderbolt/USB4 networking or bridge hardware is not implemented because there is no transport endpoint to bind to.
+Plain USB-C without Thunderbolt/USB4 networking, bridge hardware, or a real USB device/function controller is not implemented because there is no transport endpoint to bind to.
 
 ## Cursor note
 
@@ -102,8 +112,8 @@ Implemented:
 - TCP receiver on `:9000`
 - Existing OpenDisplay length-prefixed frame protocol
 - `hello`, `ping`, `pong`, and periodic `stats` control messages
-- H.264 Annex B stream forwarding to `ffplay`
-- Fullscreen video window by default, with `--windowed` opt-out
+- H.264 Annex B stream forwarding to bundled `ffplay`
+- Fullscreen receiver window by default, with `--windowed` opt-out
 - Stable install id stored in `%APPDATA%\OpenDisplayReceiver\install-id.txt`
 - Manual Mac endpoint setup instructions printed at startup
 - CI-produced self-contained win-x64 exe zip
