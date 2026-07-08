@@ -1,11 +1,3 @@
-using System.Buffers.Binary;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
-using System.Text.Json;
-
 namespace OpenDisplayReceiver;
 
 internal sealed class ReceiverOptions
@@ -16,6 +8,7 @@ internal sealed class ReceiverOptions
     public int Port { get; init; } = 9000;
     public string DeviceName { get; init; } = $"OpenDisplay Windows ({Environment.MachineName})";
     public string FfplayPath { get; init; } = "ffplay";
+    public bool Fullscreen { get; init; } = true;
     public string InstallId { get; init; } = LoadOrCreateInstallId();
     public bool ShowHelp { get; init; }
 
@@ -24,6 +17,7 @@ internal sealed class ReceiverOptions
         var defaults = new ReceiverOptions();
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var help = false;
+        var fullscreen = defaults.Fullscreen;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -31,6 +25,16 @@ internal sealed class ReceiverOptions
             if (arg is "-h" or "--help")
             {
                 help = true;
+                continue;
+            }
+            if (arg == "--fullscreen")
+            {
+                fullscreen = true;
+                continue;
+            }
+            if (arg == "--windowed")
+            {
+                fullscreen = false;
                 continue;
             }
 
@@ -58,6 +62,7 @@ internal sealed class ReceiverOptions
             Port = ReadInt(values, "--port", defaults.Port),
             DeviceName = ReadString(values, "--name", defaults.DeviceName),
             FfplayPath = ReadString(values, "--ffplay", defaults.FfplayPath),
+            Fullscreen = fullscreen,
             InstallId = defaults.InstallId,
             ShowHelp = help,
         };
@@ -72,6 +77,8 @@ internal sealed class ReceiverOptions
         Console.WriteLine("  --port 9000");
         Console.WriteLine("  --name \"Windows Display\"");
         Console.WriteLine("  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"");
+        Console.WriteLine("  --fullscreen       Start the video window fullscreen. This is the default.");
+        Console.WriteLine("  --windowed         Start the video window as a normal window.");
     }
 
     private static int ReadInt(Dictionary<string, string> values, string key, int fallback) =>
