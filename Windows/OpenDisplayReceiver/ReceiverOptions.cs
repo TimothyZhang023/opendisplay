@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Net;
+
 namespace OpenDisplayReceiver;
 
 internal sealed class ReceiverOptions
@@ -6,35 +9,39 @@ internal sealed class ReceiverOptions
     public int PixelsHigh { get; init; } = 1080;
     public double Scale { get; init; } = 2.0;
     public int Port { get; init; } = 9000;
+    public IPAddress BindAddress { get; init; } = IPAddress.Any;
     public string DeviceName { get; init; } = $"OpenDisplay Windows ({Environment.MachineName})";
-    public string FfplayPath { get; init; } = "ffplay";
+    public string FfplayPath { get; init; } = ResolveDefaultFfplayPath();
     public bool Fullscreen { get; init; } = true;
+    public bool EmbedVideo { get; init; } = true;
     public string InstallId { get; init; } = LoadOrCreateInstallId();
     public bool ShowHelp { get; init; }
+
+    public static string HelpText => string.Join(Environment.NewLine,
+        "OpenDisplayReceiver options:",
+        "  --width 1920",
+        "  --height 1080",
+        "  --scale 2",
+        "  --port 9000",
+        "  --bind 0.0.0.0",
+        "  --name \"Windows Display\"",
+        "  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"",
+        "  --fullscreen       Start fullscreen. This is the default.",
+        "  --windowed         Start as a normal window.",
+        "  --no-embed         Let ffplay create its own window instead of embedding it.");
 
     public static ReceiverOptions Parse(string[] args)
     {
         var defaults = new ReceiverOptions();
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var help = false;
-        var fullscreen = defaults.Fullscreen;
+        var flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
             if (arg is "-h" or "--help")
             {
-                help = true;
-                continue;
-            }
-            if (arg == "--fullscreen")
-            {
-                fullscreen = true;
-                continue;
-            }
-            if (arg == "--windowed")
-            {
-                fullscreen = false;
+                flags.Add("--help");
                 continue;
             }
 
@@ -52,43 +59,49 @@ internal sealed class ReceiverOptions
             {
                 values[arg] = args[++i];
             }
+            else
+            {
+                flags.Add(arg);
+            }
         }
 
         return new ReceiverOptions
         {
-            PixelsWide = ReadInt(values, "--width", defaults.PixelsWide),
-            PixelsHigh = ReadInt(values, "--height", defaults.PixelsHigh),
-            Scale = ReadDouble(values, "--scale", defaults.Scale),
+            PixelsWide = Math.Max(320, ReadInt(values, "--width", defaults.PixelsWide)),
+            PixelsHigh = Math.Max(240, ReadInt(values, "--height", defaults.PixelsHigh)),
+            Scale = Math.Max(1.0, ReadDouble(values, "--scale", defaults.Scale)),
             Port = ReadInt(values, "--port", defaults.Port),
+            BindAddress = ReadIPAddress(values, "--bind", defaults.BindAddress),
             DeviceName = ReadString(values, "--name", defaults.DeviceName),
             FfplayPath = ReadString(values, "--ffplay", defaults.FfplayPath),
-            Fullscreen = fullscreen,
+            Fullscreen = flags.Contains("--fullscreen") || (!flags.Contains("--windowed") && defaults.Fullscreen),
+            EmbedVideo = !flags.Contains("--no-embed"),
             InstallId = defaults.InstallId,
-            ShowHelp = help,
+            ShowHelp = flags.Contains("--help"),
         };
     }
 
-    public static void PrintHelp()
-    {
-        Console.WriteLine("OpenDisplayReceiver options:");
-        Console.WriteLine("  --width 1920");
-        Console.WriteLine("  --height 1080");
-        Console.WriteLine("  --scale 2");
-        Console.WriteLine("  --port 9000");
-        Console.WriteLine("  --name \"Windows Display\"");
-        Console.WriteLine("  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"");
-        Console.WriteLine("  --fullscreen       Start the video window fullscreen. This is the default.");
-        Console.WriteLine("  --windowed         Start the video window as a normal window.");
-    }
-
     private static int ReadInt(Dictionary<string, string> values, string key, int fallback) =>
-        values.TryGetValue(key, out var raw) && int.TryParse(raw, out var value) ? value : fallback;
+        values.TryGetValue(key, out var raw) && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
 
     private static double ReadDouble(Dictionary<string, string> values, string key, double fallback) =>
-        values.TryGetValue(key, out var raw) && double.TryParse(raw, out var value) ? value : fallback;
+        values.TryGetValue(key, out var raw) && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
 
     private static string ReadString(Dictionary<string, string> values, string key, string fallback) =>
         values.TryGetValue(key, out var raw) && !string.IsNullOrWhiteSpace(raw) ? raw : fallback;
+
+    private static IPAddress ReadIPAddress(Dictionary<string, string> values, string key, IPAddress fallback) =>
+        values.TryGetValue(key, out var raw) && IPAddress.TryParse(raw, out var address) ? address : fallback;
+
+    private static string ResolveDefaultFfplayPath()
+    {
+        var bundled = Path.Combine(AppContext.BaseDirectory, "ffplay.exe");
+        return File.Exists(bundled) ? bundled : "ffplay.exe";
+    }
 
     private static string LoadOrCreateInstallId()
     {
