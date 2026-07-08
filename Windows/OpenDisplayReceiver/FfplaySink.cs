@@ -1,13 +1,21 @@
 using System.Diagnostics;
+using System.Windows.Forms;
 
 namespace OpenDisplayReceiver;
 
 internal sealed class FfplaySink : IAsyncDisposable
 {
     private readonly ReceiverOptions _options;
+    private readonly Control? _videoHost;
+    private readonly Action<string> _log;
     private Process? _process;
 
-    public FfplaySink(ReceiverOptions options) => _options = options;
+    public FfplaySink(ReceiverOptions options, Control? videoHost = null, Action<string>? log = null)
+    {
+        _options = options;
+        _videoHost = videoHost;
+        _log = log ?? (_ => { });
+    }
 
     public Task StartAsync(CancellationToken token)
     {
@@ -20,6 +28,14 @@ internal sealed class FfplaySink : IAsyncDisposable
             RedirectStandardOutput = true,
             CreateNoWindow = true,
         };
+
+        // SDL/ffplay can embed into a native HWND on some builds via SDL_WINDOWID.
+        // Keep this best-effort and optional: the packaged receiver still works
+        // as a separate ffplay window when embedding is unsupported.
+        if (_videoHost is { IsHandleCreated: true })
+        {
+            psi.Environment["SDL_WINDOWID"] = _videoHost.Handle.ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
 
         AddArgs(psi,
             "-hide_banner",
@@ -42,6 +58,7 @@ internal sealed class FfplaySink : IAsyncDisposable
             "-i", "pipe:0");
 
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start ffplay");
+        _log("Started ffplay video renderer");
         _ = DrainOutputAsync(_process, token);
         return Task.CompletedTask;
     }
@@ -61,7 +78,7 @@ internal sealed class FfplaySink : IAsyncDisposable
         }
     }
 
-    private static async Task DrainOutputAsync(Process process, CancellationToken token)
+    private async Task DrainOutputAsync(Process process, CancellationToken token)
     {
         async Task DrainAsync(StreamReader reader)
         {
@@ -69,7 +86,7 @@ internal sealed class FfplaySink : IAsyncDisposable
             {
                 var line = await reader.ReadLineAsync().ConfigureAwait(false);
                 if (line is null) break;
-                if (!string.IsNullOrWhiteSpace(line)) Console.Error.WriteLine($"ffplay: {line}");
+                if (!string.IsNullOrWhiteSpace(line)) _log($"ffplay: {line}");
             }
         }
 
