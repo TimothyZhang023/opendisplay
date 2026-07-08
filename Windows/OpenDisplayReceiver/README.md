@@ -1,6 +1,8 @@
 # OpenDisplay Receiver for Windows
 
-This is a first Windows 10/11 x64 receiver for the existing OpenDisplay Mac sender protocol. It listens on TCP `:9000`, sends the same `hello` control message as the iOS receiver, keeps the Mac watchdog alive with `ping`, and displays the Mac's low-latency H.264 Annex B stream with a bundled `ffplay` runtime.
+This is a Windows 10/11 x64 receiver for the existing OpenDisplay Mac sender protocol. It listens on TCP `:9000`, sends the same `hello` control message as the iOS receiver, keeps the Mac watchdog alive with `ping`, and displays the Mac's low-latency H.264 Annex B stream.
+
+The default renderer is native Windows Media Foundation H.264 decode into the receiver window. If Media Foundation cannot initialize or decode a stream on the machine, the receiver falls back to the bundled `ffplay` runtime. You can force the fallback path with `--renderer ffplay`.
 
 The Mac is still the sender: it creates the virtual display with `CGVirtualDisplay`, captures it with ScreenCaptureKit, and streams H.264 frames over the existing length-prefixed TCP protocol.
 
@@ -8,6 +10,7 @@ The Mac is still the sender: it creates the virtual display with `CGVirtualDispl
 
 - Windows 10 or Windows 11, x64
 - Windows firewall access for TCP `9000` on private networks
+- UDP `5353` allowed on the local network if you want Bonjour/mDNS discovery
 - .NET 8 SDK only when building from source; the CI artifact is self-contained
 
 ## Download / release artifact
@@ -15,7 +18,7 @@ The Mac is still the sender: it creates the virtual display with `CGVirtualDispl
 The `Windows receiver` workflow publishes `OpenDisplayReceiver-win-x64.zip`. The zip contains:
 
 - `OpenDisplayReceiver.exe` — self-contained win-x64 app
-- `ffplay.exe` and any FFmpeg runtime DLLs found on the runner
+- `ffplay.exe` and any FFmpeg runtime DLLs found on the runner, used only as renderer fallback or with `--renderer ffplay`
 - this README
 
 Unzip it and run `OpenDisplayReceiver.exe`.
@@ -37,25 +40,43 @@ dotnet publish . -c Release -r win-x64 --self-contained true -p:PublishSingleFil
 Useful options:
 
 ```powershell
---width 2560          # pixels announced to the Mac
+--width 2560              # pixels announced to the Mac
 --height 1440
---scale 2            # the Mac creates a HiDPI display at pixels / 2 points
+--scale 2                # the Mac creates a HiDPI display at pixels / 2 points
 --port 9000
+--bind 0.0.0.0
 --name "Windows Display"
+--renderer native        # default: Media Foundation native renderer
+--renderer ffplay        # force bundled ffplay fallback
 --ffplay "C:\ffmpeg\bin\ffplay.exe"
---fullscreen          # default: start the ffplay video window fullscreen
---windowed            # start ffplay as a normal window
+--fullscreen             # default: start the receiver window fullscreen
+--windowed               # start as a normal window
+--no-embed               # only affects ffplay fallback; let ffplay create its own window
+--no-mdns                # disable _opensidecar._tcp Bonjour advertisement
 ```
 
-Inside the ffplay video window, press `f` to toggle fullscreen.
+Fullscreen controls: `F11`, `F`, or double-click the video toggles fullscreen; `Esc` exits fullscreen.
+
+## Bonjour / mDNS discovery
+
+The receiver advertises itself on the existing OpenDisplay service type:
+
+```text
+_opensidecar._tcp.local
+```
+
+The advertisement publishes PTR, SRV, TXT, and A records on multicast DNS `224.0.0.251:5353`. TXT data includes the stable install id, device name, platform, width, height, and scale. If Windows firewall, another mDNS responder, or the network blocks UDP `5353`, the app logs the failure and the manual endpoint override below still works.
+
+The Mac and iOS app targets already declare `_opensidecar._tcp` in `NSBonjourServices`, so the Windows receiver uses the same service type instead of inventing a new one.
 
 ## Connect from the Mac
 
-This first Windows receiver uses the Mac sender's manual endpoint override:
+If Bonjour discovery does not show the Windows receiver yet, use the Mac sender's manual endpoint override:
 
 ```sh
 defaults write com.peetzweg.opensidecar.mac host "WINDOWS_IP"
 defaults write com.peetzweg.opensidecar.mac port "9000"
+defaults write com.peetzweg.opensidecar.mac localCursor -bool false
 open -a OpenDisplay
 ```
 
@@ -64,6 +85,7 @@ For Debug builds from Xcode, use the debug bundle id instead:
 ```sh
 defaults write com.peetzweg.opensidecar.mac.debug host "WINDOWS_IP"
 defaults write com.peetzweg.opensidecar.mac.debug port "9000"
+defaults write com.peetzweg.opensidecar.mac.debug localCursor -bool false
 ```
 
 Clear the override later with:
@@ -71,6 +93,7 @@ Clear the override later with:
 ```sh
 defaults delete com.peetzweg.opensidecar.mac host
 defaults delete com.peetzweg.opensidecar.mac port
+defaults delete com.peetzweg.opensidecar.mac localCursor
 ```
 
 ## USB / usbmuxd note
@@ -89,16 +112,10 @@ Plain USB-C without Thunderbolt/USB4 networking, bridge hardware, or a real USB 
 
 ## Cursor note
 
-The iOS receiver draws the Mac cursor locally from `cursor` / `cursorImg` control messages. This first Windows receiver relies on `ffplay`, so it cannot draw that local overlay yet. To make the cursor visible on Windows, tell the Mac sender to include the cursor in the captured video:
+The iOS receiver draws the Mac cursor locally from `cursor` / `cursorImg` control messages. This Windows receiver does not draw that local overlay yet. To make the cursor visible on Windows, tell the Mac sender to include the cursor in the captured video:
 
 ```sh
 defaults write com.peetzweg.opensidecar.mac localCursor -bool false
-```
-
-For Debug builds:
-
-```sh
-defaults write com.peetzweg.opensidecar.mac.debug localCursor -bool false
 ```
 
 Restart the Mac app after changing this setting.
@@ -109,19 +126,19 @@ Implemented:
 
 - Windows 10/11 x64 receiver
 - TCP receiver on `:9000`
+- Bonjour/mDNS advertisement on `_opensidecar._tcp.local`
 - Existing OpenDisplay length-prefixed frame protocol
 - `hello`, `ping`, `pong`, and periodic `stats` control messages
-- H.264 Annex B stream forwarding to bundled `ffplay`
-- Fullscreen ffplay video window by default, with `--windowed` opt-out
+- Native Windows H.264 rendering with Media Foundation
+- Bundled `ffplay` fallback renderer
+- Fullscreen receiver window by default, with `--windowed` opt-out
 - Stable install id stored in `%APPDATA%\OpenDisplayReceiver\install-id.txt`
-- Manual Mac endpoint setup instructions printed at startup
+- Manual Mac endpoint setup instructions shown in the app
 - CI-produced self-contained win-x64 exe zip
 
 Not implemented yet:
 
-- Bonjour/mDNS discovery from the Mac device list
-- Native Windows H.264 renderer
-- Local cursor overlay rendering
+- Native local cursor overlay rendering
 - Touch / pointer input back to macOS
 - Direct passive USB-C Mac-to-PC transport
 - Audio forwarding
