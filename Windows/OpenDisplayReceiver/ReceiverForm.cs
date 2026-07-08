@@ -1,4 +1,4 @@
-using System.Net;
+using System.Drawing;
 using System.Windows.Forms;
 
 namespace OpenDisplayReceiver;
@@ -46,9 +46,10 @@ internal sealed class ReceiverForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             Padding = new Padding(16),
         };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -106,8 +107,6 @@ internal sealed class ReceiverForm : Form
         _logBox.Dock = DockStyle.Fill;
         _logBox.Font = new Font(FontFamily.GenericMonospace, 9);
         _logBox.Margin = new Padding(0, 8, 0, 0);
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowCount = 5;
         root.Controls.Add(_logBox, 0, 4);
     }
 
@@ -174,7 +173,7 @@ internal sealed class ReceiverForm : Form
         if (IsDisposed) return;
         if (InvokeRequired)
         {
-            BeginInvoke(() => SetStatus(text));
+            BeginInvoke(new Action(() => SetStatus(text)));
             return;
         }
         _statusLabel.Text = text;
@@ -185,7 +184,7 @@ internal sealed class ReceiverForm : Form
         if (IsDisposed) return;
         if (InvokeRequired)
         {
-            BeginInvoke(() => AppendLog(message));
+            BeginInvoke(new Action(() => AppendLog(message)));
             return;
         }
         _logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
