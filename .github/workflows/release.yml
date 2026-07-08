@@ -202,6 +202,20 @@ jobs:
       - name: Publish Windows receiver
         run: dotnet publish Windows/OpenDisplayReceiver/OpenDisplayReceiver.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o build/windows-receiver
 
+      - name: Bundle ffplay runtime
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          $publish = "build\windows-receiver"
+          $ffplay = Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Recurse -Filter ffplay.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $ffplay) {
+            $ffplay = Get-Item (Get-Command ffplay.exe -ErrorAction Stop).Source
+          }
+          Copy-Item $ffplay.FullName "$publish\ffplay.exe" -Force
+          $ffmpegBin = Split-Path -Parent $ffplay.FullName
+          Get-ChildItem $ffmpegBin -Filter *.dll -ErrorAction SilentlyContinue | Copy-Item -Destination $publish -Force
+          Get-ChildItem $ffmpegBin -Filter *license* -ErrorAction SilentlyContinue | Copy-Item -Destination $publish -Force
+
       - name: Package Windows receiver
         shell: pwsh
         run: |
