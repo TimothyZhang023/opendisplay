@@ -184,3 +184,46 @@ jobs:
           else
             echo "appcast.xml unchanged — nothing to publish"
           fi
+
+  build-windows:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore Windows receiver
+        run: dotnet restore Windows/OpenDisplayReceiver/OpenDisplayReceiver.csproj -r win-x64
+
+      - name: Publish Windows receiver
+        run: dotnet publish Windows/OpenDisplayReceiver/OpenDisplayReceiver.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o build/windows-receiver
+
+      - name: Bundle ffplay runtime
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          $publish = "build\windows-receiver"
+          $ffplay = Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Recurse -Filter ffplay.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $ffplay) {
+            $ffplay = Get-Item (Get-Command ffplay.exe -ErrorAction Stop).Source
+          }
+          Copy-Item $ffplay.FullName "$publish\ffplay.exe" -Force
+          $ffmpegBin = Split-Path -Parent $ffplay.FullName
+          Get-ChildItem $ffmpegBin -Filter *.dll -ErrorAction SilentlyContinue | Copy-Item -Destination $publish -Force
+          Get-ChildItem $ffmpegBin -Filter *license* -ErrorAction SilentlyContinue | Copy-Item -Destination $publish -Force
+
+      - name: Package Windows receiver
+        shell: pwsh
+        run: |
+          Copy-Item Windows\OpenDisplayReceiver\README.md build\windows-receiver\README.md
+          Compress-Archive -Path build\windows-receiver\* -DestinationPath build\OpenDisplayReceiver-win-x64.zip -Force
+
+      - name: Upload Windows receiver artifact to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" build/OpenDisplayReceiver-win-x64.zip --clobber
