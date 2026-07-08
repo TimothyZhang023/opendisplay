@@ -1,0 +1,103 @@
+using System.Buffers.Binary;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Text.Json;
+
+namespace OpenDisplayReceiver;
+
+internal sealed class FfplaySink : IAsyncDisposable
+{
+    private readonly ReceiverOptions _options;
+    private Process? _process;
+
+    public FfplaySink(ReceiverOptions options) => _options = options;
+
+    public Task StartAsync(CancellationToken token)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = _options.FfplayPath,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true,
+        };
+
+        foreach (var arg in new[]
+        {
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-framedrop",
+            "-sync", "ext",
+            "-probesize", "32",
+            "-an",
+            "-window_title", $"OpenDisplay - {_options.DeviceName}",
+            "-f", "h264",
+            "-i", "pipe:0",
+        })
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        _process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start ffplay");
+        _ = DrainOutputAsync(_process, token);
+        return Task.CompletedTask;
+    }
+
+    public async Task WriteAsync(ReadOnlyMemory<byte> data, CancellationToken token)
+    {
+        if (_process is null || _process.HasExited) throw new IOException("ffplay is not running");
+        await _process.StandardInput.BaseStream.WriteAsync(data, token).ConfigureAwait(false);
+        await _process.StandardInput.BaseStream.FlushAsync(token).ConfigureAwait(false);
+    }
+
+    private static async Task DrainOutputAsync(Process process, CancellationToken token)
+    {
+        async Task DrainAsync(StreamReader reader)
+        {
+            while (!token.IsCancellationRequested && !reader.EndOfStream)
+            {
+                var line = await reader.ReadLineAsync().ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(line)) Console.Error.WriteLine($"ffplay: {line}");
+            }
+        }
+
+        try
+        {
+            await Task.WhenAll(DrainAsync(process.StandardError), DrainAsync(process.StandardOutput)).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Ignore shutdown races.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_process is null) return;
+
+        try { _process.StandardInput.Close(); } catch { }
+        try
+        {
+            if (!_process.HasExited)
+            {
+                _process.Kill(entireProcessTree: true);
+                await _process.WaitForExitAsync().ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+        finally
+        {
+            _process.Dispose();
+        }
+    }
+}
