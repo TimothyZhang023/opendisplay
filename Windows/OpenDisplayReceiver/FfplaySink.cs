@@ -3,7 +3,7 @@ using System.Windows.Forms;
 
 namespace OpenDisplayReceiver;
 
-internal sealed class FfplaySink : IAsyncDisposable
+internal sealed class FfplaySink : IVideoSink
 {
     private readonly ReceiverOptions _options;
     private readonly Control? _videoHost;
@@ -16,6 +16,8 @@ internal sealed class FfplaySink : IAsyncDisposable
         _videoHost = videoHost;
         _log = log ?? (_ => { });
     }
+
+    public string Name => "ffplay";
 
     public Task StartAsync(CancellationToken token)
     {
