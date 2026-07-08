@@ -30,17 +30,21 @@ jobs:
           New-Item -ItemType Directory -Force build | Out-Null
           dotnet build Windows/OpenDisplayReceiver/OpenDisplayReceiver.csproj -c Release -r win-x64 --no-restore *> build\windows-build.log
           $exitCode = $LASTEXITCODE
-          "exit_code=$exitCode" >> $env:GITHUB_OUTPUT
+          if ($exitCode -eq 0) {
+            "build_failed=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "build_failed=true" >> $env:GITHUB_OUTPUT
+          }
           Get-Content build\windows-build.log
           exit 0
       - name: Upload build log on failure
-        if: steps.build_receiver.outputs.exit_code != '0'
+        if: steps.build_receiver.outputs.build_failed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: OpenDisplayReceiver-build-log
           path: build/windows-build.log
       - name: Fail if receiver did not build
-        if: steps.build_receiver.outputs.exit_code != '0'
+        if: steps.build_receiver.outputs.build_failed == 'true'
         shell: pwsh
         run: exit 1
       - name: Publish self-contained receiver exe
