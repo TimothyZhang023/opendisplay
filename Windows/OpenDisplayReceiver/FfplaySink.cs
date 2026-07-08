@@ -1,10 +1,5 @@
-using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
-using System.Text.Json;
 
 namespace OpenDisplayReceiver;
 
@@ -27,8 +22,7 @@ internal sealed class FfplaySink : IAsyncDisposable
             CreateNoWindow = true,
         };
 
-        foreach (var arg in new[]
-        {
+        AddArgs(psi,
             "-hide_banner",
             "-loglevel", "warning",
             "-fflags", "nobuffer",
@@ -37,13 +31,16 @@ internal sealed class FfplaySink : IAsyncDisposable
             "-sync", "ext",
             "-probesize", "32",
             "-an",
-            "-window_title", $"OpenDisplay - {_options.DeviceName}",
-            "-f", "h264",
-            "-i", "pipe:0",
-        })
+            "-window_title", $"OpenDisplay - {_options.DeviceName}");
+
+        if (_options.Fullscreen)
         {
-            psi.ArgumentList.Add(arg);
+            AddArgs(psi, "-fs");
         }
+
+        AddArgs(psi,
+            "-f", "h264",
+            "-i", "pipe:0");
 
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start ffplay");
         _ = DrainOutputAsync(_process, token);
@@ -55,6 +52,14 @@ internal sealed class FfplaySink : IAsyncDisposable
         if (_process is null || _process.HasExited) throw new IOException("ffplay is not running");
         await _process.StandardInput.BaseStream.WriteAsync(data, token).ConfigureAwait(false);
         await _process.StandardInput.BaseStream.FlushAsync(token).ConfigureAwait(false);
+    }
+
+    private static void AddArgs(ProcessStartInfo psi, params string[] args)
+    {
+        foreach (var arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
     }
 
     private static async Task DrainOutputAsync(Process process, CancellationToken token)
@@ -93,7 +98,7 @@ internal sealed class FfplaySink : IAsyncDisposable
         }
         catch
         {
-            // ignore
+            // Ignore shutdown races.
         }
         finally
         {
