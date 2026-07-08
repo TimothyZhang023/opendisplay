@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.ComponentModel;
-using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -25,6 +24,9 @@ internal sealed class Receiver
 
     public async Task RunAsync(CancellationToken token)
     {
+        await using var mdns = new MdnsAdvertiser(_options, Log);
+        await mdns.StartAsync(token).ConfigureAwait(false);
+
         var listener = new TcpListener(_options.BindAddress, _options.Port);
         listener.Server.NoDelay = true;
         listener.Start();
@@ -56,7 +58,7 @@ internal sealed class Receiver
 
     private async Task HandleClientAsync(TcpClient client, CancellationToken token)
     {
-        await using var ffplay = new FfplaySink(_options, _videoHost, Log);
+        await using var videoSink = CreateVideoSink();
         using var ownedClient = client;
         using var stream = ownedClient.GetStream();
         var sendLock = new SemaphoreSlim(1, 1);
@@ -64,11 +66,12 @@ internal sealed class Receiver
 
         try
         {
-            await ffplay.StartAsync(token).ConfigureAwait(false);
+            await videoSink.StartAsync(token).ConfigureAwait(false);
+            Log("Video renderer: " + videoSink.Name);
             await SendHelloAsync(stream, sendLock, token).ConfigureAwait(false);
             _ = PingLoopAsync(stream, sendLock, token);
             _ = StatsLoopAsync(stream, sendLock, stats, token);
-            await ReadFramesAsync(stream, ffplay, stats, token).ConfigureAwait(false);
+            await ReadFramesAsync(stream, videoSink, stats, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -90,6 +93,12 @@ internal sealed class Receiver
             _status("Connection failed: " + ex.Message);
         }
     }
+
+    private IVideoSink CreateVideoSink() => _options.Renderer switch
+    {
+        VideoRendererKind.Ffplay => new FfplaySink(_options, _videoHost, Log),
+        _ => new NativeH264Sink(_options, _videoHost, Log),
+    };
 
     private async Task SendHelloAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
     {
@@ -138,7 +147,7 @@ internal sealed class Receiver
         }
     }
 
-    private async Task ReadFramesAsync(Stream stream, FfplaySink ffplay, FrameStats stats, CancellationToken token)
+    private async Task ReadFramesAsync(Stream stream, IVideoSink videoSink, FrameStats stats, CancellationToken token)
     {
         var header = new byte[4];
         var announcedVideo = false;
@@ -166,7 +175,7 @@ internal sealed class Receiver
             if (startCode < 0) continue;
 
             var video = payload.AsMemory(startCode);
-            await ffplay.WriteAsync(video, token).ConfigureAwait(false);
+            await videoSink.WriteAsync(video, token).ConfigureAwait(false);
             stats.RecordFrame(video.Length);
 
             if (!announcedVideo)
