@@ -13,7 +13,6 @@ internal sealed class ReceiverOptions
     public string DeviceName { get; init; } = $"OpenDisplay Windows ({Environment.MachineName})";
     public string FfplayPath { get; init; } = ResolveDefaultFfplayPath();
     public bool Fullscreen { get; init; } = true;
-    public bool EmbedVideo { get; init; } = true;
     public string InstallId { get; init; } = LoadOrCreateInstallId();
     public bool ShowHelp { get; init; }
 
@@ -26,9 +25,10 @@ internal sealed class ReceiverOptions
         "  --bind 0.0.0.0",
         "  --name \"Windows Display\"",
         "  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"",
-        "  --fullscreen       Start fullscreen. This is the default.",
-        "  --windowed         Start as a normal window.",
-        "  --no-embed         Let ffplay create its own window instead of embedding it.");
+        "  --fullscreen       Start the video window fullscreen. This is the default.",
+        "  --windowed         Start the video window as a normal window.");
+
+    public static void PrintHelp() => Console.WriteLine(HelpText);
 
     public static ReceiverOptions Parse(string[] args)
     {
@@ -75,7 +75,6 @@ internal sealed class ReceiverOptions
             DeviceName = ReadString(values, "--name", defaults.DeviceName),
             FfplayPath = ReadString(values, "--ffplay", defaults.FfplayPath),
             Fullscreen = flags.Contains("--fullscreen") || (!flags.Contains("--windowed") && defaults.Fullscreen),
-            EmbedVideo = !flags.Contains("--no-embed"),
             InstallId = defaults.InstallId,
             ShowHelp = flags.Contains("--help"),
         };
