@@ -1,8 +1,6 @@
 using System.Buffers.Binary;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text.Json;
 
@@ -47,8 +45,8 @@ internal sealed class Receiver
     private async Task HandleClientAsync(TcpClient client, CancellationToken token)
     {
         await using var ffplay = new FfplaySink(_options);
-        using var _ = client;
-        await using var stream = client.GetStream();
+        using var ownedClient = client;
+        using var stream = ownedClient.GetStream();
         var sendLock = new SemaphoreSlim(1, 1);
         var stats = new FrameStats();
 
@@ -116,7 +114,7 @@ internal sealed class Receiver
             await SendControlAsync(stream, sendLock, new Dictionary<string, object?>
             {
                 ["type"] = "stats",
-                ["transport"] = "WiFi",
+                ["transport"] = "TCP",
                 ["fps"] = snapshot.Fps,
                 ["mbps"] = Math.Round(snapshot.Mbps, 1),
                 ["stalls"] = snapshot.Stalls,
@@ -133,8 +131,8 @@ internal sealed class Receiver
         while (!token.IsCancellationRequested)
         {
             await ReadExactAsync(stream, header, token).ConfigureAwait(false);
-            var len = BinaryPrimitives.ReadUInt32BigEndian(header);
-            if (len == 0 || len > 64 * 1024 * 1024)
+            var len = (int)BinaryPrimitives.ReadUInt32BigEndian(header);
+            if (len <= 0 || len > 64 * 1024 * 1024)
             {
                 throw new InvalidDataException($"Invalid frame length: {len}");
             }
