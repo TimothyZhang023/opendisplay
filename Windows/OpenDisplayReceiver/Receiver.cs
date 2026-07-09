@@ -66,12 +66,11 @@ internal sealed class Receiver
 
         try
         {
-            await videoSink.StartAsync(token).ConfigureAwait(false);
-            Log("Video renderer: " + videoSink.Name);
+            Log("Video renderer selected: " + videoSink.Name);
             await SendHelloAsync(stream, sendLock, token).ConfigureAwait(false);
             _ = PingLoopAsync(stream, sendLock, token);
             _ = StatsLoopAsync(stream, sendLock, stats, token);
-            await ReadFramesAsync(stream, videoSink, stats, token).ConfigureAwait(false);
+            await ReadFramesAsync(stream, sendLock, videoSink, stats, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -96,8 +95,8 @@ internal sealed class Receiver
 
     private IVideoSink CreateVideoSink() => _options.Renderer switch
     {
-        VideoRendererKind.Ffplay => new FfplaySink(_options, _videoHost, Log),
-        _ => new NativeH264Sink(_options, _videoHost, Log),
+        VideoRendererKind.Native => new NativeH264Sink(_options, _videoHost, Log),
+        _ => new FfplaySink(_options, _videoHost, Log),
     };
 
     private async Task SendHelloAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
@@ -147,10 +146,13 @@ internal sealed class Receiver
         }
     }
 
-    private async Task ReadFramesAsync(Stream stream, IVideoSink videoSink, FrameStats stats, CancellationToken token)
+    private async Task ReadFramesAsync(Stream stream, SemaphoreSlim sendLock, IVideoSink videoSink, FrameStats stats, CancellationToken token)
     {
         var header = new byte[4];
         var announcedVideo = false;
+        var sinkStarted = false;
+        var startupGate = new H264StartupGate(Log);
+        var lastKeyframeRequest = DateTime.MinValue;
 
         while (!token.IsCancellationRequested)
         {
@@ -172,19 +174,60 @@ internal sealed class Receiver
             }
 
             var startCode = FindAnnexBStartCode(payload);
-            if (startCode < 0) continue;
+            if (startCode < 0)
+            {
+                Log($"Skipping non-JSON payload without Annex B start code ({payload.Length} bytes)");
+                continue;
+            }
 
             var video = payload.AsMemory(startCode);
+            var analysis = H264Analysis.Analyze(video.Span);
+            if (analysis.NalCount == 0)
+            {
+                Log($"Skipping Annex B payload without complete NAL units ({video.Length} bytes)");
+                continue;
+            }
+
+            if (!sinkStarted)
+            {
+                startupGate.Observe(analysis, video.Length);
+                if (!startupGate.Ready)
+                {
+                    var now = DateTime.UtcNow;
+                    if ((now - lastKeyframeRequest).TotalMilliseconds >= 1000)
+                    {
+                        lastKeyframeRequest = now;
+                        Log($"Waiting for H.264 SPS/PPS/IDR before starting renderer; saw {analysis.Describe()}; requesting keyframe");
+                        await RequestKeyframeAsync(stream, sendLock, token).ConfigureAwait(false);
+                    }
+                    continue;
+                }
+
+                await videoSink.StartAsync(token).ConfigureAwait(false);
+                sinkStarted = true;
+                Log($"Video renderer started after H.264 sync: {videoSink.Name}; {analysis.Describe()}");
+            }
+
             await videoSink.WriteAsync(video, token).ConfigureAwait(false);
             stats.RecordFrame(video.Length);
 
             if (!announcedVideo)
             {
                 announcedVideo = true;
-                Log("Receiving video");
+                Log($"Receiving video: {analysis.Describe()}");
                 _status("Receiving video");
             }
         }
+    }
+
+    private async Task RequestKeyframeAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
+    {
+        await SendControlAsync(stream, sendLock, new Dictionary<string, object?>
+        {
+            ["type"] = "kf",
+            ["reason"] = "receiver-startup-sync",
+            ["t"] = Clock.NowMs,
+        }, token).ConfigureAwait(false);
     }
 
     private void HandleMacJson(byte[] payload)
@@ -253,4 +296,98 @@ internal sealed class Receiver
     }
 
     private void Log(string message) => _log(message);
+
+    private sealed class H264StartupGate
+    {
+        private readonly Action<string> _log;
+        private int _framesObserved;
+        private bool _seenSps;
+        private bool _seenPps;
+        private bool _seenIdr;
+
+        public H264StartupGate(Action<string> log) => _log = log;
+
+        public bool Ready => _seenSps && _seenPps && _seenIdr;
+
+        public void Observe(H264Analysis analysis, int bytes)
+        {
+            _framesObserved++;
+            _seenSps |= analysis.HasSps;
+            _seenPps |= analysis.HasPps;
+            _seenIdr |= analysis.HasIdr;
+
+            if (_framesObserved <= 8 || Ready)
+            {
+                _log($"H.264 startup frame #{_framesObserved}: {bytes} bytes; {analysis.Describe()}; sync sps={_seenSps} pps={_seenPps} idr={_seenIdr}");
+            }
+        }
+    }
+
+    private readonly record struct H264Analysis(int NalCount, bool HasSps, bool HasPps, bool HasIdr, bool HasSlice, string NalTypes)
+    {
+        public string Describe() => $"nals={NalCount} types=[{NalTypes}] sps={HasSps} pps={HasPps} idr={HasIdr} slice={HasSlice}";
+
+        public static H264Analysis Analyze(ReadOnlySpan<byte> annexB)
+        {
+            var types = new List<int>();
+            var hasSps = false;
+            var hasPps = false;
+            var hasIdr = false;
+            var hasSlice = false;
+
+            var offset = 0;
+            while (TryFindStartCode(annexB, offset, out var startCodeOffset, out var startCodeLength))
+            {
+                var nalStart = startCodeOffset + startCodeLength;
+                if (nalStart >= annexB.Length) break;
+
+                var nextSearchOffset = nalStart;
+                if (!TryFindStartCode(annexB, nextSearchOffset, out var nextStartCodeOffset, out _))
+                {
+                    nextStartCodeOffset = annexB.Length;
+                }
+
+                if (nextStartCodeOffset > nalStart)
+                {
+                    var type = annexB[nalStart] & 0x1F;
+                    types.Add(type);
+                    hasSps |= type == 7;
+                    hasPps |= type == 8;
+                    hasIdr |= type == 5;
+                    hasSlice |= type is 1 or 5;
+                }
+
+                offset = nextStartCodeOffset;
+                if (offset >= annexB.Length) break;
+            }
+
+            var display = types.Count == 0 ? "none" : string.Join(',', types.Take(16));
+            if (types.Count > 16) display += ",…";
+            return new H264Analysis(types.Count, hasSps, hasPps, hasIdr, hasSlice, display);
+        }
+
+        private static bool TryFindStartCode(ReadOnlySpan<byte> data, int start, out int offset, out int length)
+        {
+            for (var i = Math.Max(0, start); i <= data.Length - 3; i++)
+            {
+                if (data[i] != 0 || data[i + 1] != 0) continue;
+                if (data[i + 2] == 1)
+                {
+                    offset = i;
+                    length = 3;
+                    return true;
+                }
+                if (i <= data.Length - 4 && data[i + 2] == 0 && data[i + 3] == 1)
+                {
+                    offset = i;
+                    length = 4;
+                    return true;
+                }
+            }
+
+            offset = -1;
+            length = 0;
+            return false;
+        }
+    }
 }
