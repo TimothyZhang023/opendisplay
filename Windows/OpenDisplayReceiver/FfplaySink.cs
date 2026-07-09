@@ -32,21 +32,22 @@ internal sealed class FfplaySink : IVideoSink
         };
 
         // SDL/ffplay can embed into a native HWND on some builds via SDL_WINDOWID.
-        // Keep this best-effort and optional: the packaged receiver still works
-        // as a separate ffplay window when embedding is unsupported.
-        if (_videoHost is { IsHandleCreated: true })
+        // Keep this optional because embedding support varies across FFmpeg/SDL builds.
+        if (_options.EmbedVideo && _videoHost is { IsHandleCreated: true })
         {
             psi.Environment["SDL_WINDOWID"] = _videoHost.Handle.ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            _log("ffplay embedding requested through SDL_WINDOWID");
         }
 
         AddArgs(psi,
             "-hide_banner",
-            "-loglevel", "warning",
+            "-loglevel", "info",
             "-fflags", "nobuffer",
             "-flags", "low_delay",
             "-framedrop",
             "-sync", "ext",
-            "-probesize", "32",
+            "-analyzeduration", "1000000",
+            "-probesize", "1000000",
             "-an",
             "-window_title", $"OpenDisplay - {_options.DeviceName}");
 
