@@ -44,7 +44,7 @@ The app writes a persistent log file on every run:
 %LOCALAPPDATA%\OpenDisplayReceiver\Logs\latest.log
 ```
 
-The receiver window shows the current log path and has an **Open log folder** button. Startup details, renderer selection, mDNS status, connection events, ffplay output, and unhandled exceptions are written there. Logs older than 14 days are removed on startup.
+The receiver window shows the current log path and has **Copy log path** and **Open log folder** buttons. Startup details, renderer selection, mDNS status, connection events, ffplay output, and unhandled exceptions are written there. Logs older than 14 days are removed on startup. If `%LOCALAPPDATA%` logging cannot be initialized, the logger falls back to the system temp directory instead of crashing the app.
 
 ## Build and run from source
 
