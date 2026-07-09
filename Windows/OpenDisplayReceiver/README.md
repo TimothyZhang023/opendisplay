@@ -11,17 +11,40 @@ The Mac is still the sender: it creates the virtual display with `CGVirtualDispl
 - Windows 10 or Windows 11, x64
 - Windows firewall access for TCP `9000` on private networks
 - UDP `5353` allowed on the local network if you want Bonjour/mDNS discovery
-- .NET 8 SDK only when building from source; the CI artifact is self-contained
+- .NET 8 SDK only when building from source; the CI artifacts are self-contained
 
-## Download / release artifact
+## Download / release artifacts
 
-The `Windows receiver` workflow publishes `OpenDisplayReceiver-win-x64.zip`. The zip contains:
+The `Windows receiver` workflow publishes two Windows artifacts:
 
-- `OpenDisplayReceiver.exe` — self-contained win-x64 app
-- `ffplay.exe` and any FFmpeg runtime DLLs found on the runner, used only as renderer fallback or with `--renderer ffplay`
-- this README
+- `OpenDisplayReceiver-win-x64.zip` — release package for normal use
+- `OpenDisplayReceiver-win-x64-debug.zip` — debug package for crash investigation; built with Debug configuration, non-single-file layout, and portable `.pdb` symbols
 
-Unzip it and run `OpenDisplayReceiver.exe`.
+Both packages include `OpenDisplayReceiver.exe`, `ffplay.exe`, FFmpeg runtime DLLs, and this README. Unzip either package and run `OpenDisplayReceiver.exe`.
+
+## Log files
+
+The receiver writes a file log immediately at process startup, before options are parsed or the WinForms UI is created. It captures normal receiver logs, UI thread exceptions, unhandled AppDomain exceptions, and unobserved Task exceptions.
+
+Logs are written to:
+
+```text
+%LOCALAPPDATA%\OpenDisplayReceiver\Logs\
+```
+
+The current run has a timestamped file, for example:
+
+```text
+OpenDisplayReceiver-20260709-101530-12345.log
+```
+
+The same content is also appended to a stable file:
+
+```text
+latest.log
+```
+
+The app window shows the current log path and has buttons to copy the log path or open the logs folder. If the app exits too early to show a window, send `%LOCALAPPDATA%\OpenDisplayReceiver\Logs\latest.log`.
 
 ## Build and run from source
 
@@ -31,10 +54,16 @@ From this directory:
 dotnet run -c Release -- --width 1920 --height 1080 --scale 2
 ```
 
-Create the same self-contained exe shape that CI publishes:
+Create the same self-contained release exe shape that CI publishes:
 
 ```powershell
 dotnet publish . -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish\win-x64
+```
+
+Create a local debug package with `.pdb` symbols:
+
+```powershell
+dotnet publish . -c Debug -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=portable -p:DebugSymbols=true -o publish\win-x64-debug
 ```
 
 Useful options:
@@ -131,10 +160,11 @@ Implemented:
 - `hello`, `ping`, `pong`, and periodic `stats` control messages
 - Native Windows H.264 rendering with Media Foundation
 - Bundled `ffplay` fallback renderer
+- File logging to `%LOCALAPPDATA%\OpenDisplayReceiver\Logs\latest.log`
+- CI-produced release and debug win-x64 zip packages
 - Fullscreen receiver window by default, with `--windowed` opt-out
 - Stable install id stored in `%APPDATA%\OpenDisplayReceiver\install-id.txt`
 - Manual Mac endpoint setup instructions shown in the app
-- CI-produced self-contained win-x64 exe zip
 
 Not implemented yet:
 
