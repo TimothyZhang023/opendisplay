@@ -223,14 +223,19 @@ internal sealed class ReceiverForm : Form
 
     private void AppendLog(string message)
     {
-        AppLogger.WriteLine(message);
+        if (IsDisposed)
+        {
+            AppLogger.WriteLine(message);
+            return;
+        }
 
-        if (IsDisposed) return;
         if (InvokeRequired)
         {
             BeginInvoke(new Action(() => AppendLog(message)));
             return;
         }
+
+        AppLogger.WriteLine(message);
         _logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
     }
 
