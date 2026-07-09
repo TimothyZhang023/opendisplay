@@ -2,7 +2,7 @@
 
 This is a Windows 10/11 x64 receiver for the existing OpenDisplay Mac sender protocol. It listens on TCP `:9000`, sends the same `hello` control message as the iOS receiver, keeps the Mac watchdog alive with `ping`, and displays the Mac's low-latency H.264 Annex B stream.
 
-The default renderer is native Windows Media Foundation H.264 decode into the receiver window. If Media Foundation cannot initialize or decode a stream on the machine, the receiver falls back to the bundled `ffplay` runtime. You can force the fallback path with `--renderer ffplay`.
+The default renderer is the bundled `ffplay` runtime. The receiver waits until it sees H.264 SPS/PPS/IDR sync before starting the renderer and requests a keyframe from the Mac while waiting. The native Windows Media Foundation renderer is still available with `--renderer native` for testing.
 
 The Mac is still the sender: it creates the virtual display with `CGVirtualDisplay`, captures it with ScreenCaptureKit, and streams H.264 frames over the existing length-prefixed TCP protocol.
 
@@ -18,7 +18,7 @@ The Mac is still the sender: it creates the virtual display with `CGVirtualDispl
 The `Windows receiver` workflow publishes `OpenDisplayReceiver-win-x64.zip`. The zip contains:
 
 - `OpenDisplayReceiver.exe` — self-contained win-x64 app
-- `ffplay.exe` and any FFmpeg runtime DLLs found on the runner, used only as renderer fallback or with `--renderer ffplay`
+- `ffplay.exe` and any FFmpeg runtime DLLs found on the runner
 - this README
 
 Unzip it and run `OpenDisplayReceiver.exe`.
@@ -30,8 +30,9 @@ The workflow also publishes `OpenDisplayReceiver-win-x64-debug.zip`. Use this wh
 Useful debug commands:
 
 ```powershell
-.\OpenDisplayReceiver.exe --windowed --renderer native
+.\OpenDisplayReceiver.exe --windowed
 .\OpenDisplayReceiver.exe --windowed --renderer ffplay
+.\OpenDisplayReceiver.exe --windowed --renderer native
 .\OpenDisplayReceiver.exe --windowed --no-mdns
 ```
 
@@ -44,7 +45,7 @@ The app writes a persistent log file on every run:
 %LOCALAPPDATA%\OpenDisplayReceiver\Logs\latest.log
 ```
 
-The receiver window shows the current log path and has **Copy log path** and **Open log folder** buttons. Startup details, renderer selection, mDNS status, connection events, ffplay output, and unhandled exceptions are written there. Logs older than 14 days are removed on startup. If `%LOCALAPPDATA%` logging cannot be initialized, the logger falls back to the system temp directory instead of crashing the app.
+The receiver window shows the current log path and has **Copy log path** and **Open log folder** buttons. Startup details, renderer selection, H.264 startup NAL types, keyframe requests, mDNS status, connection events, ffplay output, and unhandled exceptions are written there. Logs older than 14 days are removed on startup. If `%LOCALAPPDATA%` logging cannot be initialized, the logger falls back to the system temp directory instead of crashing the app.
 
 ## Build and run from source
 
@@ -69,12 +70,12 @@ Useful options:
 --port 9000
 --bind 0.0.0.0
 --name "Windows Display"
---renderer native        # default: Media Foundation native renderer
---renderer ffplay        # force bundled ffplay fallback
+--renderer ffplay        # default: bundled ffplay renderer
+--renderer native        # test Media Foundation native renderer
 --ffplay "C:\ffmpeg\bin\ffplay.exe"
 --fullscreen             # default: start the receiver window fullscreen
 --windowed               # start as a normal window
---no-embed               # only affects ffplay fallback; let ffplay create its own window
+--no-embed               # let ffplay create its own window instead of embedding it
 --no-mdns                # disable _opensidecar._tcp Bonjour advertisement
 ```
 
@@ -152,8 +153,9 @@ Implemented:
 - Bonjour/mDNS advertisement on `_opensidecar._tcp.local`
 - Existing OpenDisplay length-prefixed frame protocol
 - `hello`, `ping`, `pong`, and periodic `stats` control messages
-- Native Windows H.264 rendering with Media Foundation
-- Bundled `ffplay` fallback renderer
+- Bundled `ffplay` renderer by default
+- H.264 SPS/PPS/IDR startup sync and keyframe requests
+- Native Windows H.264 rendering with Media Foundation for testing
 - Persistent app and crash logs in `%LOCALAPPDATA%\OpenDisplayReceiver\Logs`
 - Debug CI artifact with PDB symbols
 - Fullscreen receiver window by default, with `--windowed` opt-out
