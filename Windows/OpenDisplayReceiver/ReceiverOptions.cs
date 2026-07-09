@@ -21,7 +21,7 @@ internal sealed class ReceiverOptions
     public bool Fullscreen { get; init; } = true;
     public bool EmbedVideo { get; init; } = true;
     public bool EnableMdns { get; init; } = true;
-    public VideoRendererKind Renderer { get; init; } = VideoRendererKind.Native;
+    public VideoRendererKind Renderer { get; init; } = VideoRendererKind.Ffplay;
     public string InstallId { get; init; } = LoadOrCreateInstallId();
     public bool ShowHelp { get; init; }
 
@@ -33,7 +33,7 @@ internal sealed class ReceiverOptions
         "  --port 9000",
         "  --bind 0.0.0.0",
         "  --name \"Windows Display\"",
-        "  --renderer native|ffplay",
+        "  --renderer ffplay|native",
         "  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"",
         "  --fullscreen       Start fullscreen. This is the default.",
         "  --windowed         Start as a normal window.",
