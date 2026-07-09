@@ -12,6 +12,7 @@ internal sealed class ReceiverForm : Form
     private readonly TextBox _logBox = new();
     private readonly Label _instructionsLabel = new();
     private readonly Button _copyMacCommandsButton = new();
+    private readonly Button _copyLogPathButton = new();
     private readonly Button _openLogFolderButton = new();
     private readonly Button _toggleFullscreenButton = new();
     private readonly NativeVideoSurface _videoSurface = new();
@@ -99,7 +100,8 @@ internal sealed class ReceiverForm : Form
             $"Listening port: {_options.Port}\r\n" +
             $"Renderer: {_options.Renderer}\r\n" +
             $"Bonjour/mDNS: {(_options.EnableMdns ? "advertising _opensidecar._tcp" : "disabled")}\r\n" +
-            $"Log file: {AppLogger.CurrentLogPath}\r\n\r\n" +
+            $"Log file: {AppLogger.CurrentLogPath}\r\n" +
+            $"Latest log: {AppLogger.LatestLogPath}\r\n\r\n" +
             "Run this on the Mac sender if Bonjour discovery does not show it yet:\r\n" + commands;
         _instructionsLabel.AutoSize = true;
         _instructionsLabel.MaximumSize = new Size(1050, 0);
@@ -117,6 +119,11 @@ internal sealed class ReceiverForm : Form
         _copyMacCommandsButton.AutoSize = true;
         _copyMacCommandsButton.Click += (_, _) => Clipboard.SetText(commands);
         buttons.Controls.Add(_copyMacCommandsButton);
+
+        _copyLogPathButton.Text = "Copy log path";
+        _copyLogPathButton.AutoSize = true;
+        _copyLogPathButton.Click += (_, _) => Clipboard.SetText(AppLogger.CurrentLogPath);
+        buttons.Controls.Add(_copyLogPathButton);
 
         _openLogFolderButton.Text = "Open log folder";
         _openLogFolderButton.AutoSize = true;
@@ -145,6 +152,7 @@ internal sealed class ReceiverForm : Form
     {
         AppendLog("OpenDisplay Receiver starting");
         AppendLog($"log file: {AppLogger.CurrentLogPath}");
+        AppendLog($"latest log: {AppLogger.LatestLogPath}");
         AppendLog($"log directory: {AppLogger.LogDirectory}");
         AppendLog($"renderer: {_options.Renderer}");
         AppendLog($"ffplay fallback: {_options.FfplayPath}");
