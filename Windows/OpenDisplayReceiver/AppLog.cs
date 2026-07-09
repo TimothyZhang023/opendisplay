@@ -18,19 +18,7 @@ internal static class AppLog
         lock (Gate)
         {
             if (_initialized) return;
-
-            DirectoryPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OpenDisplayReceiver",
-                "Logs");
-            Directory.CreateDirectory(DirectoryPath);
-
-            var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            CurrentFilePath = Path.Combine(DirectoryPath, $"OpenDisplayReceiver-{timestamp}-{Environment.ProcessId}.log");
-            LatestFilePath = Path.Combine(DirectoryPath, "latest.log");
-
-            File.WriteAllText(CurrentFilePath, string.Empty, Encoding.UTF8);
-            File.WriteAllText(LatestFilePath, string.Empty, Encoding.UTF8);
+            PrepareLogFiles();
             _initialized = true;
         }
 
@@ -65,6 +53,7 @@ internal static class AppLog
     public static void Write(string level, string message)
     {
         EnsureInitializedWithoutArgs();
+        if (string.IsNullOrWhiteSpace(CurrentFilePath) || string.IsNullOrWhiteSpace(LatestFilePath)) return;
 
         var normalized = message.Replace("\r\n", "\n").Replace('\r', '\n');
         var lines = normalized.Split('\n');
@@ -84,10 +73,17 @@ internal static class AppLog
         }
 
         var text = builder.ToString();
-        lock (Gate)
+        try
         {
-            File.AppendAllText(CurrentFilePath, text, Encoding.UTF8);
-            File.AppendAllText(LatestFilePath, text, Encoding.UTF8);
+            lock (Gate)
+            {
+                File.AppendAllText(CurrentFilePath, text, Encoding.UTF8);
+                File.AppendAllText(LatestFilePath, text, Encoding.UTF8);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine("OpenDisplayReceiver logging failed: " + ex);
         }
     }
 
@@ -108,6 +104,40 @@ internal static class AppLog
         }
     }
 
+    private static void PrepareLogFiles()
+    {
+        var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        var fileName = $"OpenDisplayReceiver-{timestamp}-{Environment.ProcessId}.log";
+
+        foreach (var baseDirectory in CandidateBaseDirectories())
+        {
+            try
+            {
+                DirectoryPath = Path.Combine(baseDirectory, "OpenDisplayReceiver", "Logs");
+                Directory.CreateDirectory(DirectoryPath);
+                CurrentFilePath = Path.Combine(DirectoryPath, fileName);
+                LatestFilePath = Path.Combine(DirectoryPath, "latest.log");
+                File.WriteAllText(CurrentFilePath, string.Empty, Encoding.UTF8);
+                File.WriteAllText(LatestFilePath, string.Empty, Encoding.UTF8);
+                return;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Could not initialize OpenDisplayReceiver log in " + baseDirectory + ": " + ex);
+            }
+        }
+
+        DirectoryPath = string.Empty;
+        CurrentFilePath = string.Empty;
+        LatestFilePath = string.Empty;
+    }
+
+    private static IEnumerable<string> CandidateBaseDirectories()
+    {
+        yield return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        yield return Path.GetTempPath();
+    }
+
     private static void EnsureInitializedWithoutArgs()
     {
         if (_initialized) return;
@@ -124,6 +154,8 @@ internal static class AppLog
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(DirectoryPath)) return;
+
             var logs = Directory.GetFiles(DirectoryPath, "OpenDisplayReceiver-*.log")
                 .Select(path => new FileInfo(path))
                 .OrderByDescending(file => file.CreationTimeUtc)
