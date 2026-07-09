@@ -12,6 +12,7 @@ internal sealed class ReceiverForm : Form
     private readonly TextBox _logBox = new();
     private readonly Label _instructionsLabel = new();
     private readonly Button _copyMacCommandsButton = new();
+    private readonly Button _openLogFolderButton = new();
     private readonly Button _toggleFullscreenButton = new();
     private readonly NativeVideoSurface _videoSurface = new();
     private FormBorderStyle _previousBorderStyle = FormBorderStyle.Sizable;
@@ -38,7 +39,11 @@ internal sealed class ReceiverForm : Form
                 ToggleControlWindowFullscreen();
             }
         };
-        FormClosing += (_, _) => _cts.Cancel();
+        FormClosing += (_, _) =>
+        {
+            AppendLog("Receiver window closing");
+            _cts.Cancel();
+        };
         KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.F11 || e.KeyCode == Keys.F || (e.Alt && e.KeyCode == Keys.Enter))
@@ -93,7 +98,8 @@ internal sealed class ReceiverForm : Form
             $"Resolution announced to Mac: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x\r\n" +
             $"Listening port: {_options.Port}\r\n" +
             $"Renderer: {_options.Renderer}\r\n" +
-            $"Bonjour/mDNS: {(_options.EnableMdns ? "advertising _opensidecar._tcp" : "disabled")}\r\n\r\n" +
+            $"Bonjour/mDNS: {(_options.EnableMdns ? "advertising _opensidecar._tcp" : "disabled")}\r\n" +
+            $"Log file: {AppLogger.CurrentLogPath}\r\n\r\n" +
             "Run this on the Mac sender if Bonjour discovery does not show it yet:\r\n" + commands;
         _instructionsLabel.AutoSize = true;
         _instructionsLabel.MaximumSize = new Size(1050, 0);
@@ -111,6 +117,11 @@ internal sealed class ReceiverForm : Form
         _copyMacCommandsButton.AutoSize = true;
         _copyMacCommandsButton.Click += (_, _) => Clipboard.SetText(commands);
         buttons.Controls.Add(_copyMacCommandsButton);
+
+        _openLogFolderButton.Text = "Open log folder";
+        _openLogFolderButton.AutoSize = true;
+        _openLogFolderButton.Click += (_, _) => AppLogger.OpenLogDirectory(AppendLog);
+        buttons.Controls.Add(_openLogFolderButton);
 
         _toggleFullscreenButton.Text = "Toggle fullscreen (F11 / F / double-click video)";
         _toggleFullscreenButton.AutoSize = true;
@@ -133,6 +144,8 @@ internal sealed class ReceiverForm : Form
     private void StartReceiver()
     {
         AppendLog("OpenDisplay Receiver starting");
+        AppendLog($"log file: {AppLogger.CurrentLogPath}");
+        AppendLog($"log directory: {AppLogger.LogDirectory}");
         AppendLog($"renderer: {_options.Renderer}");
         AppendLog($"ffplay fallback: {_options.FfplayPath}");
         AppendLog($"mDNS/Bonjour: {(_options.EnableMdns ? "enabled" : "disabled")}");
@@ -147,10 +160,11 @@ internal sealed class ReceiverForm : Form
             }
             catch (OperationCanceledException)
             {
-                // Normal shutdown.
+                AppendLog("Receiver task stopped");
             }
             catch (Exception ex)
             {
+                AppLogger.WriteException("Receiver task failed", ex);
                 AppendLog(ex.ToString());
                 SetStatus("Receiver failed: " + ex.Message);
             }
@@ -179,6 +193,7 @@ internal sealed class ReceiverForm : Form
             Bounds = Screen.FromControl(this).Bounds;
             TopMost = true;
             _controlWindowFullscreen = true;
+            AppendLog("Entered fullscreen");
         }
         else
         {
@@ -191,6 +206,7 @@ internal sealed class ReceiverForm : Form
             }
             WindowState = _previousWindowState;
             _controlWindowFullscreen = false;
+            AppendLog("Exited fullscreen");
         }
     }
 
@@ -207,6 +223,8 @@ internal sealed class ReceiverForm : Form
 
     private void AppendLog(string message)
     {
+        AppLogger.WriteLine(message);
+
         if (IsDisposed) return;
         if (InvokeRequired)
         {
