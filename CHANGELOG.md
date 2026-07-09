@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1](https://github.com/TimothyZhang023/opendisplay/compare/v0.2.0...v0.2.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* make ffplay startup less fragile ([1226549](https://github.com/TimothyZhang023/opendisplay/commit/122654959c5303560903a26162fc5b30c76f25d1))
+* make ffplay the default Windows renderer ([6aa6e37](https://github.com/TimothyZhang023/opendisplay/commit/6aa6e37f3f7a57d210ea6a6f8eb3ad2eedca8ea1))
+* wait for h264 sync before starting renderer ([dd8053f](https://github.com/TimothyZhang023/opendisplay/commit/dd8053f47360ad9a07c2de2205892fc35990c0c3))
+
 ## [0.2.0](https://github.com/TimothyZhang023/opendisplay/compare/v0.1.0...v0.2.0) (2026-07-09)
 
 
