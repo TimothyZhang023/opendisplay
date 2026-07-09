@@ -70,11 +70,13 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item Windows\OpenDisplayReceiver\README.md build\windows-receiver\README.md
+          Copy-Item Windows\OpenDisplayReceiver\DEBUGGING.md build\windows-receiver\DEBUGGING.md
           Compress-Archive -Path build\windows-receiver\* -DestinationPath build\OpenDisplayReceiver-win-x64.zip -Force
       - name: Package debug receiver
         shell: pwsh
         run: |
           Copy-Item Windows\OpenDisplayReceiver\README.md build\windows-receiver-debug\README.md
+          Copy-Item Windows\OpenDisplayReceiver\DEBUGGING.md build\windows-receiver-debug\DEBUGGING.md
           @'
           OpenDisplay Receiver Debug Package
 
