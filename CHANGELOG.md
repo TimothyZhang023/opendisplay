@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/TimothyZhang023/opendisplay/compare/v0.1.0...v0.2.0) (2026-07-09)
+
+
+### Features
+
+* add persistent Windows receiver logging ([26978e2](https://github.com/TimothyZhang023/opendisplay/commit/26978e210250e9d9b63c221c25880a0b1ab3391c))
+* log Windows receiver crashes ([7f5d5dd](https://github.com/TimothyZhang023/opendisplay/commit/7f5d5dd703b06dc9f10b6c80997fb35b41253a29))
+* surface Windows receiver log file in UI ([2f6d778](https://github.com/TimothyZhang023/opendisplay/commit/2f6d7783f75be0f50ec0f316a3ad8442a1754d3d))
+
+
+### Bug Fixes
+
+* avoid duplicate cross-thread receiver log lines ([b0cb38b](https://github.com/TimothyZhang023/opendisplay/commit/b0cb38bc3b463e8e8ac99f76b317e0cbc61f456c))
+* harden Windows receiver crash logging ([ed1fb2c](https://github.com/TimothyZhang023/opendisplay/commit/ed1fb2ca6913112a3303332957c13e3c25214559))
+* make Windows receiver logger failure-safe ([aae23e8](https://github.com/TimothyZhang023/opendisplay/commit/aae23e89a85d51ab6ec6b80aa4f4a575be3b7f8a))
+
 ## [0.1.0](https://github.com/TimothyZhang023/opendisplay/compare/v0.11.0...v0.1.0) (2026-07-08)
 
 
