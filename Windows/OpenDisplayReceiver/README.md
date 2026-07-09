@@ -23,6 +23,29 @@ The `Windows receiver` workflow publishes `OpenDisplayReceiver-win-x64.zip`. The
 
 Unzip it and run `OpenDisplayReceiver.exe`.
 
+## Debug artifact
+
+The workflow also publishes `OpenDisplayReceiver-win-x64-debug.zip`. Use this when a Windows machine crashes or behaves differently from CI. It is a Debug configuration publish with managed DLLs and PDB symbols kept separate, plus `DEBUGGING.txt`.
+
+Useful debug commands:
+
+```powershell
+.\OpenDisplayReceiver.exe --windowed --renderer native
+.\OpenDisplayReceiver.exe --windowed --renderer ffplay
+.\OpenDisplayReceiver.exe --windowed --no-mdns
+```
+
+## Logs
+
+The app writes a persistent log file on every run:
+
+```text
+%LOCALAPPDATA%\OpenDisplayReceiver\Logs\OpenDisplayReceiver-YYYYMMDD-HHMMSS-PID.log
+%LOCALAPPDATA%\OpenDisplayReceiver\Logs\latest.log
+```
+
+The receiver window shows the current log path and has an **Open log folder** button. Startup details, renderer selection, mDNS status, connection events, ffplay output, and unhandled exceptions are written there. Logs older than 14 days are removed on startup.
+
 ## Build and run from source
 
 From this directory:
@@ -131,6 +154,8 @@ Implemented:
 - `hello`, `ping`, `pong`, and periodic `stats` control messages
 - Native Windows H.264 rendering with Media Foundation
 - Bundled `ffplay` fallback renderer
+- Persistent app and crash logs in `%LOCALAPPDATA%\OpenDisplayReceiver\Logs`
+- Debug CI artifact with PDB symbols
 - Fullscreen receiver window by default, with `--windowed` opt-out
 - Stable install id stored in `%APPDATA%\OpenDisplayReceiver\install-id.txt`
 - Manual Mac endpoint setup instructions shown in the app
