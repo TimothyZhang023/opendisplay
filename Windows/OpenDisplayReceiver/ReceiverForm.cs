@@ -35,7 +35,7 @@ internal sealed class ReceiverForm : Form
         Load += (_, _) =>
         {
             StartReceiver();
-            if (_options.Fullscreen)
+            if (_options.Fullscreen && (_options.Renderer == VideoRendererKind.Native || _options.EmbedVideo))
             {
                 ToggleControlWindowFullscreen();
             }
@@ -58,7 +58,10 @@ internal sealed class ReceiverForm : Form
                 e.Handled = true;
             }
         };
-        _videoSurface.DoubleClick += (_, _) => ToggleControlWindowFullscreen();
+        if (_options.Renderer == VideoRendererKind.Native || _options.EmbedVideo)
+        {
+            _videoSurface.DoubleClick += (_, _) => ToggleControlWindowFullscreen();
+        }
     }
 
     private void BuildLayout()
@@ -99,6 +102,7 @@ internal sealed class ReceiverForm : Form
             $"Resolution announced to Mac: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x\r\n" +
             $"Listening port: {_options.Port}\r\n" +
             $"Renderer: {_options.Renderer}\r\n" +
+            $"ffplay mode: {(_options.EmbedVideo ? "embedded (experimental)" : "external window")}; hwaccel={_options.FfplayHardwareAcceleration}\r\n" +
             $"Bonjour/mDNS: {(_options.EnableMdns ? "advertising _opensidecar._tcp" : "disabled")}\r\n" +
             $"Log file: {AppLogger.CurrentLogPath}\r\n" +
             $"Latest log: {AppLogger.LatestLogPath}\r\n\r\n" +
@@ -132,6 +136,7 @@ internal sealed class ReceiverForm : Form
 
         _toggleFullscreenButton.Text = "Toggle fullscreen (F11 / F / double-click video)";
         _toggleFullscreenButton.AutoSize = true;
+        _toggleFullscreenButton.Visible = _options.Renderer == VideoRendererKind.Native || _options.EmbedVideo;
         _toggleFullscreenButton.Click += (_, _) => ToggleControlWindowFullscreen();
         buttons.Controls.Add(_toggleFullscreenButton);
         root.Controls.Add(buttons, 0, 3);
@@ -156,6 +161,7 @@ internal sealed class ReceiverForm : Form
         AppendLog($"log directory: {AppLogger.LogDirectory}");
         AppendLog($"renderer: {_options.Renderer}");
         AppendLog($"ffplay fallback: {_options.FfplayPath}");
+        AppendLog($"ffplay mode: {(_options.EmbedVideo ? "embedded" : "external")}; hwaccel={_options.FfplayHardwareAcceleration}");
         AppendLog($"mDNS/Bonjour: {(_options.EnableMdns ? "enabled" : "disabled")}");
         AppendLog("Plain USB-C Mac-to-PC is not a supported transport because both sides are USB hosts. Use TCP over LAN or another real network interface.");
 
