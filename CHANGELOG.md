@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.2](https://github.com/TimothyZhang023/opendisplay/compare/v0.2.1...v0.2.2) (2026-07-10)
+
+
+### Bug Fixes
+
+* **windows:** align UI with external ffplay ([9a3444a](https://github.com/TimothyZhang023/opendisplay/commit/9a3444a027c843295e85aea98228a15e6e272b1a))
+* **windows:** default ffplay to external window ([8bf8609](https://github.com/TimothyZhang023/opendisplay/commit/8bf8609c9225ea79970316224f41748adbadccb9))
+
+
+### Performance Improvements
+
+* **windows:** accelerate ffplay and reduce H.264 copies ([15a4cbf](https://github.com/TimothyZhang023/opendisplay/commit/15a4cbfaf4975103ad778c02f845fed3dd6fae82))
+* **windows:** enable ffplay hardware decoding ([e79b4aa](https://github.com/TimothyZhang023/opendisplay/commit/e79b4aaafb1e9013c513092e62fb1cca15b95a2e))
+* **windows:** pool h264 frame buffers ([a7b1f99](https://github.com/TimothyZhang023/opendisplay/commit/a7b1f99371b33e06b4b45a51ad94e8cce7e52679))
+
 ## [0.2.1](https://github.com/TimothyZhang023/opendisplay/compare/v0.2.0...v0.2.1) (2026-07-09)
 
 
