@@ -18,8 +18,9 @@ internal sealed class ReceiverOptions
     public IPAddress BindAddress { get; init; } = IPAddress.Any;
     public string DeviceName { get; init; } = $"OpenDisplay Windows ({Environment.MachineName})";
     public string FfplayPath { get; init; } = ResolveDefaultFfplayPath();
+    public string FfplayHardwareAcceleration { get; init; } = "auto";
     public bool Fullscreen { get; init; } = true;
-    public bool EmbedVideo { get; init; } = true;
+    public bool EmbedVideo { get; init; }
     public bool EnableMdns { get; init; } = true;
     public VideoRendererKind Renderer { get; init; } = VideoRendererKind.Ffplay;
     public string InstallId { get; init; } = LoadOrCreateInstallId();
@@ -35,9 +36,11 @@ internal sealed class ReceiverOptions
         "  --name \"Windows Display\"",
         "  --renderer ffplay|native",
         "  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"",
+        "  --ffplay-hwaccel auto|none|d3d11va|dxva2|qsv|cuda",
         "  --fullscreen       Start fullscreen. This is the default.",
         "  --windowed         Start as a normal window.",
-        "  --no-embed         Let ffplay create its own window instead of embedding it.",
+        "  --embed            Experimental: embed ffplay in WinForms (external is the default).",
+        "  --no-embed         Compatibility alias that keeps ffplay external.",
         "  --no-mdns          Do not advertise _opensidecar._tcp over mDNS/Bonjour.");
 
     public static void PrintHelp() => Console.WriteLine(HelpText);
@@ -99,8 +102,9 @@ internal sealed class ReceiverOptions
             BindAddress = ReadIPAddress(values, "--bind", defaults.BindAddress),
             DeviceName = ReadString(values, "--name", defaults.DeviceName),
             FfplayPath = ReadString(values, "--ffplay", defaults.FfplayPath),
+            FfplayHardwareAcceleration = ReadFfplayHardwareAcceleration(values, defaults.FfplayHardwareAcceleration),
             Fullscreen = flags.Contains("--fullscreen") || (!flags.Contains("--windowed") && defaults.Fullscreen),
-            EmbedVideo = !flags.Contains("--no-embed"),
+            EmbedVideo = flags.Contains("--embed") && !flags.Contains("--no-embed"),
             EnableMdns = !flags.Contains("--no-mdns"),
             Renderer = ReadRenderer(values, defaults.Renderer),
             InstallId = defaults.InstallId,
@@ -131,6 +135,16 @@ internal sealed class ReceiverOptions
         {
             "native" or "mf" or "mediafoundation" => VideoRendererKind.Native,
             "ffplay" or "external" => VideoRendererKind.Ffplay,
+            _ => fallback,
+        };
+    }
+
+    private static string ReadFfplayHardwareAcceleration(Dictionary<string, string> values, string fallback)
+    {
+        if (!values.TryGetValue("--ffplay-hwaccel", out var raw) || string.IsNullOrWhiteSpace(raw)) return fallback;
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "auto" or "none" or "d3d11va" or "dxva2" or "qsv" or "cuda" => raw.Trim().ToLowerInvariant(),
             _ => fallback,
         };
     }

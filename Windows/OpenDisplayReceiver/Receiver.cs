@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Net.Sockets;
@@ -13,6 +14,7 @@ internal sealed class Receiver
     private readonly Action<string> _log;
     private readonly Action<string> _status;
     private CancellationTokenSource? _activeClient;
+    private static readonly int[] StartupKeyframeRetryScheduleMs = [250, 750, 1500, 2500];
 
     public Receiver(ReceiverOptions options, Control? videoHost = null, Action<string>? log = null, Action<string>? status = null)
     {
@@ -61,16 +63,31 @@ internal sealed class Receiver
         await using var videoSink = CreateVideoSink();
         using var ownedClient = client;
         using var stream = ownedClient.GetStream();
-        var sendLock = new SemaphoreSlim(1, 1);
+        using var sendLock = new SemaphoreSlim(1, 1);
+        using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        using var startupKeyframeCts = CancellationTokenSource.CreateLinkedTokenSource(connectionCts.Token);
+        var connectionToken = connectionCts.Token;
         var stats = new FrameStats();
+        var pingTask = Task.CompletedTask;
+        var statsTask = Task.CompletedTask;
+        var startupKeyframeTask = Task.CompletedTask;
 
         try
         {
             Log("Video renderer selected: " + videoSink.Name);
-            await SendHelloAsync(stream, sendLock, token).ConfigureAwait(false);
-            _ = PingLoopAsync(stream, sendLock, token);
-            _ = StatsLoopAsync(stream, sendLock, stats, token);
-            await ReadFramesAsync(stream, sendLock, videoSink, stats, token).ConfigureAwait(false);
+            await SendHelloAsync(stream, sendLock, connectionToken).ConfigureAwait(false);
+            await RequestKeyframeAsync(stream, sendLock, "hello", connectionToken).ConfigureAwait(false);
+            Log("Requested H.264 keyframe immediately after hello");
+
+            startupKeyframeTask = StartupKeyframeRetryLoopAsync(stream, sendLock, startupKeyframeCts.Token);
+            pingTask = PingLoopAsync(stream, sendLock, connectionToken);
+            statsTask = StatsLoopAsync(stream, sendLock, stats, connectionToken);
+            await ReadFramesAsync(
+                stream,
+                videoSink,
+                stats,
+                startupKeyframeCts.Cancel,
+                connectionToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -90,6 +107,12 @@ internal sealed class Receiver
         {
             Log($"Connection failed: {ex.Message}");
             _status("Connection failed: " + ex.Message);
+        }
+        finally
+        {
+            startupKeyframeCts.Cancel();
+            connectionCts.Cancel();
+            await ObserveBackgroundTasksAsync(startupKeyframeTask, pingTask, statsTask).ConfigureAwait(false);
         }
     }
 
@@ -146,13 +169,19 @@ internal sealed class Receiver
         }
     }
 
-    private async Task ReadFramesAsync(Stream stream, SemaphoreSlim sendLock, IVideoSink videoSink, FrameStats stats, CancellationToken token)
+    private async Task ReadFramesAsync(
+        Stream stream,
+        IVideoSink videoSink,
+        FrameStats stats,
+        Action onRendererStarted,
+        CancellationToken token)
     {
+        const int maxCachedParameterSetBytes = 64 * 1024;
         var header = new byte[4];
         var announcedVideo = false;
         var sinkStarted = false;
         var startupGate = new H264StartupGate(Log);
-        var lastKeyframeRequest = DateTime.MinValue;
+        var startupParameterSets = new ArrayBufferWriter<byte>(256);
 
         while (!token.IsCancellationRequested)
         {
@@ -164,73 +193,115 @@ internal sealed class Receiver
             }
             var length = (int)rawLength;
 
-            var payload = new byte[length];
-            await ReadExactAsync(stream, payload, token).ConfigureAwait(false);
-
-            if (IsPureJson(payload))
+            var rentedPayload = ArrayPool<byte>.Shared.Rent(length);
+            try
             {
-                HandleMacJson(payload);
-                continue;
-            }
+                var payload = rentedPayload.AsMemory(0, length);
+                await ReadExactAsync(stream, payload, token).ConfigureAwait(false);
 
-            var startCode = FindAnnexBStartCode(payload);
-            if (startCode < 0)
-            {
-                Log($"Skipping non-JSON payload without Annex B start code ({payload.Length} bytes)");
-                continue;
-            }
-
-            var video = payload.AsMemory(startCode);
-            var analysis = H264Analysis.Analyze(video.Span);
-            if (analysis.NalCount == 0)
-            {
-                Log($"Skipping Annex B payload without complete NAL units ({video.Length} bytes)");
-                continue;
-            }
-
-            if (!sinkStarted)
-            {
-                startupGate.Observe(analysis, video.Length);
-                if (!startupGate.Ready)
+                if (IsPureJson(payload.Span))
                 {
-                    var now = DateTime.UtcNow;
-                    if ((now - lastKeyframeRequest).TotalMilliseconds >= 1000)
-                    {
-                        lastKeyframeRequest = now;
-                        Log($"Waiting for H.264 SPS/PPS/IDR before starting renderer; saw {analysis.Describe()}; requesting keyframe");
-                        await RequestKeyframeAsync(stream, sendLock, token).ConfigureAwait(false);
-                    }
+                    HandleMacJson(payload);
                     continue;
                 }
 
-                await videoSink.StartAsync(token).ConfigureAwait(false);
-                sinkStarted = true;
-                Log($"Video renderer started after H.264 sync: {videoSink.Name}; {analysis.Describe()}");
+                var startCode = FindAnnexBStartCode(payload.Span);
+                if (startCode < 0)
+                {
+                    Log($"Skipping non-JSON payload without Annex B start code ({payload.Length} bytes)");
+                    continue;
+                }
+
+                var video = payload[startCode..];
+                var analysis = default(H264Analysis);
+                if (!sinkStarted)
+                {
+                    analysis = H264Analysis.Analyze(video.Span);
+                    if (analysis.NalCount == 0)
+                    {
+                        Log($"Skipping Annex B payload without complete NAL units ({video.Length} bytes)");
+                        continue;
+                    }
+
+                    startupGate.Observe(analysis, video.Length);
+                    H264Analysis.CopyParameterSets(video.Span, startupParameterSets, maxCachedParameterSetBytes);
+                    if (!startupGate.Ready)
+                    {
+                        continue;
+                    }
+
+                    await videoSink.StartAsync(token).ConfigureAwait(false);
+                    if (startupParameterSets.WrittenCount > 0 && (!analysis.HasSps || !analysis.HasPps))
+                    {
+                        await videoSink.WriteAsync(startupParameterSets.WrittenMemory, token).ConfigureAwait(false);
+                        Log($"Primed decoder with {startupParameterSets.WrittenCount} cached SPS/PPS bytes");
+                    }
+
+                    sinkStarted = true;
+                    onRendererStarted();
+                    Log($"Video renderer started after H.264 sync: {videoSink.Name}; {analysis.Describe()}");
+                }
+
+                await videoSink.WriteAsync(video, token).ConfigureAwait(false);
+                stats.RecordFrame(video.Length);
+
+                if (!announcedVideo)
+                {
+                    announcedVideo = true;
+                    Log($"Receiving video: {analysis.Describe()}");
+                    _status("Receiving video");
+                }
             }
-
-            await videoSink.WriteAsync(video, token).ConfigureAwait(false);
-            stats.RecordFrame(video.Length);
-
-            if (!announcedVideo)
+            finally
             {
-                announcedVideo = true;
-                Log($"Receiving video: {analysis.Describe()}");
-                _status("Receiving video");
+                ArrayPool<byte>.Shared.Return(rentedPayload);
             }
         }
     }
 
-    private async Task RequestKeyframeAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
+    private async Task StartupKeyframeRetryLoopAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
+    {
+        try
+        {
+            var previousDelayMs = 0;
+            for (var i = 0; i < StartupKeyframeRetryScheduleMs.Length; i++)
+            {
+                var scheduledDelayMs = StartupKeyframeRetryScheduleMs[i];
+                await Task.Delay(scheduledDelayMs - previousDelayMs, token).ConfigureAwait(false);
+                await RequestKeyframeAsync(stream, sendLock, $"startup-retry-{i + 1}", token).ConfigureAwait(false);
+                Log($"Repeated startup keyframe request #{i + 1} at {scheduledDelayMs} ms");
+                previousDelayMs = scheduledDelayMs;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Renderer synchronized or connection stopped.
+        }
+    }
+
+    private async Task RequestKeyframeAsync(Stream stream, SemaphoreSlim sendLock, string reason, CancellationToken token)
     {
         await SendControlAsync(stream, sendLock, new Dictionary<string, object?>
         {
             ["type"] = "kf",
-            ["reason"] = "receiver-startup-sync",
+            ["reason"] = reason,
             ["t"] = Clock.NowMs,
         }, token).ConfigureAwait(false);
     }
 
-    private void HandleMacJson(byte[] payload)
+    private static async Task ObserveBackgroundTasksAsync(params Task[] tasks)
+    {
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The foreground read path reports the connection result.
+        }
+    }
+
+    private void HandleMacJson(ReadOnlyMemory<byte> payload)
     {
         try
         {
@@ -280,14 +351,15 @@ internal sealed class Receiver
         }
     }
 
-    private static bool IsPureJson(byte[] payload) =>
-        payload.Length > 0 && payload[0] == (byte)'{' && Array.IndexOf(payload, (byte)0) < 0;
+    private static bool IsPureJson(ReadOnlySpan<byte> payload) =>
+        payload.Length > 0 && payload[0] == (byte)'{' && payload.IndexOf((byte)0) < 0;
 
-    private static int FindAnnexBStartCode(byte[] payload)
+    private static int FindAnnexBStartCode(ReadOnlySpan<byte> payload)
     {
-        for (var i = 0; i <= payload.Length - 4; i++)
+        for (var i = 0; i <= payload.Length - 3; i++)
         {
-            if (payload[i] == 0 && payload[i + 1] == 0 && payload[i + 2] == 0 && payload[i + 3] == 1)
+            if (payload[i] != 0 || payload[i + 1] != 0) continue;
+            if (payload[i + 2] == 1 || (i <= payload.Length - 4 && payload[i + 2] == 0 && payload[i + 3] == 1))
             {
                 return i;
             }
@@ -312,9 +384,13 @@ internal sealed class Receiver
         public void Observe(H264Analysis analysis, int bytes)
         {
             _framesObserved++;
+            if (_framesObserved == 1)
+            {
+                _log("H.264 NAL legend: 7=SPS, 8=PPS, 5=IDR");
+            }
             _seenSps |= analysis.HasSps;
             _seenPps |= analysis.HasPps;
-            _seenIdr |= analysis.HasIdr;
+            _seenIdr |= analysis.HasIdr && _seenSps && _seenPps;
 
             if (_framesObserved <= 8 || Ready)
             {
@@ -364,6 +440,35 @@ internal sealed class Receiver
             var display = types.Count == 0 ? "none" : string.Join(',', types.Take(16));
             if (types.Count > 16) display += ",…";
             return new H264Analysis(types.Count, hasSps, hasPps, hasIdr, hasSlice, display);
+        }
+
+        public static void CopyParameterSets(
+            ReadOnlySpan<byte> annexB,
+            ArrayBufferWriter<byte> destination,
+            int maxBytes)
+        {
+            var offset = 0;
+            while (TryFindStartCode(annexB, offset, out var startCodeOffset, out var startCodeLength))
+            {
+                var nalStart = startCodeOffset + startCodeLength;
+                if (nalStart >= annexB.Length) break;
+
+                if (!TryFindStartCode(annexB, nalStart, out var nextStartCodeOffset, out _))
+                {
+                    nextStartCodeOffset = annexB.Length;
+                }
+
+                var type = annexB[nalStart] & 0x1F;
+                var nalLength = nextStartCodeOffset - startCodeOffset;
+                if (type is 7 or 8 && nalLength > 0 && destination.WrittenCount + nalLength <= maxBytes)
+                {
+                    annexB.Slice(startCodeOffset, nalLength).CopyTo(destination.GetSpan(nalLength));
+                    destination.Advance(nalLength);
+                }
+
+                offset = nextStartCodeOffset;
+                if (offset >= annexB.Length) break;
+            }
         }
 
         private static bool TryFindStartCode(ReadOnlySpan<byte> data, int start, out int offset, out int length)

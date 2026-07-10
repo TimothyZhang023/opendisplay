@@ -2,7 +2,9 @@
 
 This is a Windows 10/11 x64 receiver for the existing OpenDisplay Mac sender protocol. It listens on TCP `:9000`, sends the same `hello` control message as the iOS receiver, keeps the Mac watchdog alive with `ping`, and displays the Mac's low-latency H.264 Annex B stream.
 
-The default renderer is the bundled `ffplay` runtime. The receiver waits until it sees H.264 SPS/PPS/IDR sync before starting the renderer and requests a keyframe from the Mac while waiting. The native Windows Media Foundation renderer is still available with `--renderer native` for testing.
+The default renderer is the bundled `ffplay` runtime in its own SDL window. It uses `-hwaccel auto` so FFmpeg selects D3D11VA, DXVA2, QSV, CUDA, or software fallback according to the Windows machine and bundled FFmpeg build. The native Windows Media Foundation renderer remains opt-in with `--renderer native`.
+
+The receiver requests a keyframe immediately after `hello`, retries at 250/750/1500/2500 ms until the renderer is synchronized, logs the first eight H.264 frames' NAL types, and waits for SPS (7), PPS (8), then IDR (5). It caches the small SPS/PPS NAL units so parameter sets that arrive before the IDR are still passed to ffplay.
 
 The Mac is still the sender: it creates the virtual display with `CGVirtualDisplay`, captures it with ScreenCaptureKit, and streams H.264 frames over the existing length-prefixed TCP protocol.
 
@@ -32,6 +34,8 @@ Useful debug commands:
 ```powershell
 .\OpenDisplayReceiver.exe --windowed
 .\OpenDisplayReceiver.exe --windowed --renderer ffplay
+.\OpenDisplayReceiver.exe --windowed --ffplay-hwaccel d3d11va
+.\OpenDisplayReceiver.exe --windowed --ffplay-hwaccel none
 .\OpenDisplayReceiver.exe --windowed --renderer native
 .\OpenDisplayReceiver.exe --windowed --no-mdns
 ```
@@ -73,13 +77,22 @@ Useful options:
 --renderer ffplay        # default: bundled ffplay renderer
 --renderer native        # test Media Foundation native renderer
 --ffplay "C:\ffmpeg\bin\ffplay.exe"
---fullscreen             # default: start the receiver window fullscreen
---windowed               # start as a normal window
---no-embed               # let ffplay create its own window instead of embedding it
+--ffplay-hwaccel auto    # default: let FFmpeg choose D3D11VA/DXVA2/QSV/CUDA
+--ffplay-hwaccel none    # diagnostic software-decoding fallback
+--fullscreen             # default: start the external ffplay window fullscreen
+--windowed               # start ffplay as a normal external window
+--embed                  # experimental SDL_WINDOWID embedding; external is safer/default
+--no-embed               # explicit external-window compatibility option
 --no-mdns                # disable _opensidecar._tcp Bonjour advertisement
 ```
 
-Fullscreen controls: `F11`, `F`, or double-click the video toggles fullscreen; `Esc` exits fullscreen.
+For the default external ffplay window, use ffplay's `F` key to toggle fullscreen. The WinForms `F11` / double-click controls apply to the native or experimental embedded renderer.
+
+## ffplay latency and throughput
+
+The receiver starts ffplay with raw H.264 input, `-analyzeduration 1000000`, `-probesize 1048576`, hardware acceleration, direct AVIO, no demux buffering, low-delay decode, video-clock sync, and frame dropping. `ffplay` stderr stays in the application log so the selected hardware path or software fallback can be verified on the target PC.
+
+The steady-state receive path rents frame buffers from `ArrayPool<byte>` and passes a slice directly from `NetworkStream` to ffplay stdin. It no longer allocates a large byte array or flushes the pipe for every video frame; startup NAL parsing stops once SPS/PPS/IDR synchronization completes.
 
 ## Bonjour / mDNS discovery
 
@@ -154,7 +167,10 @@ Implemented:
 - Existing OpenDisplay length-prefixed frame protocol
 - `hello`, `ping`, `pong`, and periodic `stats` control messages
 - Bundled `ffplay` renderer by default
-- H.264 SPS/PPS/IDR startup sync and keyframe requests
+- External ffplay SDL window by default; experimental embedding with `--embed`
+- Automatic ffplay H.264 hardware acceleration with a selectable override
+- H.264 SPS/PPS/IDR startup sync, parameter-set priming, and scheduled keyframe requests
+- Pooled steady-state frame buffers and no per-frame pipe flush
 - Native Windows H.264 rendering with Media Foundation for testing
 - Persistent app and crash logs in `%LOCALAPPDATA%\OpenDisplayReceiver\Logs`
 - Debug CI artifact with PDB symbols

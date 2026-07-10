@@ -9,6 +9,7 @@ internal sealed class FfplaySink : IVideoSink
     private readonly Control? _videoHost;
     private readonly Action<string> _log;
     private Process? _process;
+    private Stream? _input;
 
     public FfplaySink(ReceiverOptions options, Control? videoHost = null, Action<string>? log = null)
     {
@@ -27,7 +28,7 @@ internal sealed class FfplaySink : IVideoSink
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardError = true,
-            RedirectStandardOutput = true,
+            RedirectStandardOutput = false,
             CreateNoWindow = true,
         };
 
@@ -38,16 +39,29 @@ internal sealed class FfplaySink : IVideoSink
             psi.Environment["SDL_WINDOWID"] = _videoHost.Handle.ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture);
             _log("ffplay embedding requested through SDL_WINDOWID");
         }
+        else
+        {
+            _log("ffplay will use an external SDL window");
+        }
 
         AddArgs(psi,
             "-hide_banner",
-            "-loglevel", "info",
+            "-loglevel", "info");
+
+        if (_options.FfplayHardwareAcceleration != "none")
+        {
+            AddArgs(psi, "-hwaccel", _options.FfplayHardwareAcceleration);
+        }
+
+        AddArgs(psi,
             "-fflags", "nobuffer",
             "-flags", "low_delay",
+            "-avioflags", "direct",
+            "-max_delay", "0",
             "-framedrop",
-            "-sync", "ext",
+            "-sync", "video",
             "-analyzeduration", "1000000",
-            "-probesize", "1000000",
+            "-probesize", "1048576",
             "-an",
             "-window_title", $"OpenDisplay - {_options.DeviceName}");
 
@@ -61,16 +75,16 @@ internal sealed class FfplaySink : IVideoSink
             "-i", "pipe:0");
 
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start ffplay");
-        _log("Started ffplay video renderer");
-        _ = DrainOutputAsync(_process, token);
+        _input = _process.StandardInput.BaseStream;
+        _log($"Started ffplay video renderer (hwaccel={_options.FfplayHardwareAcceleration}, probe=1048576, analyze=1000000us)");
+        _ = DrainDiagnosticsAsync(_process, token);
         return Task.CompletedTask;
     }
 
-    public async Task WriteAsync(ReadOnlyMemory<byte> data, CancellationToken token)
+    public Task WriteAsync(ReadOnlyMemory<byte> data, CancellationToken token)
     {
-        if (_process is null || _process.HasExited) throw new IOException("ffplay is not running");
-        await _process.StandardInput.BaseStream.WriteAsync(data, token).ConfigureAwait(false);
-        await _process.StandardInput.BaseStream.FlushAsync(token).ConfigureAwait(false);
+        var input = _input ?? throw new IOException("ffplay is not running");
+        return input.WriteAsync(data, token).AsTask();
     }
 
     private static void AddArgs(ProcessStartInfo psi, params string[] args)
@@ -81,21 +95,16 @@ internal sealed class FfplaySink : IVideoSink
         }
     }
 
-    private async Task DrainOutputAsync(Process process, CancellationToken token)
+    private async Task DrainDiagnosticsAsync(Process process, CancellationToken token)
     {
-        async Task DrainAsync(StreamReader reader)
+        try
         {
             while (!token.IsCancellationRequested)
             {
-                var line = await reader.ReadLineAsync().ConfigureAwait(false);
+                var line = await process.StandardError.ReadLineAsync().ConfigureAwait(false);
                 if (line is null) break;
                 if (!string.IsNullOrWhiteSpace(line)) _log($"ffplay: {line}");
             }
-        }
-
-        try
-        {
-            await Task.WhenAll(DrainAsync(process.StandardError), DrainAsync(process.StandardOutput)).ConfigureAwait(false);
         }
         catch
         {
@@ -107,7 +116,8 @@ internal sealed class FfplaySink : IVideoSink
     {
         if (_process is null) return;
 
-        try { _process.StandardInput.Close(); } catch { }
+        try { _input?.Close(); } catch { }
+        _input = null;
         try
         {
             if (!_process.HasExited)
