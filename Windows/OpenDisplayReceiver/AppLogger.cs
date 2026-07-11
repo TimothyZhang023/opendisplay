@@ -1,12 +1,15 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace OpenDisplayReceiver;
 
 internal static class AppLogger
 {
     private static readonly object Gate = new();
-    private static bool _initialized;
+    private static volatile bool _initialized;
     private static string? _currentLogPath;
+    private static StreamWriter? _currentWriter;
+    private static StreamWriter? _latestWriter;
     private static string _logDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "OpenDisplayReceiver",
@@ -35,26 +38,33 @@ internal static class AppLogger
     public static void WriteLine(string message)
     {
         EnsureInitialized(Array.Empty<string>());
-        if (string.IsNullOrWhiteSpace(_currentLogPath) || string.IsNullOrWhiteSpace(LatestLogPath)) return;
-
-        var line = $"[{DateTimeOffset.Now:O}] [pid {Environment.ProcessId}] [thread {Environment.CurrentManagedThreadId}] {message}{Environment.NewLine}";
-        try
+        var line = $"[{DateTimeOffset.Now:O}] [pid {Environment.ProcessId}] [thread {Environment.CurrentManagedThreadId}] {message}";
+        lock (Gate)
         {
-            lock (Gate)
+            try
             {
-                File.AppendAllText(_currentLogPath, line);
-                File.AppendAllText(LatestLogPath, line);
+                _currentWriter?.WriteLine(line);
+                _latestWriter?.WriteLine(line);
             }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine("OpenDisplayReceiver logging failed: " + ex);
+            catch (Exception ex)
+            {
+                Debug.WriteLine("OpenDisplayReceiver logging failed: " + ex);
+                CloseWritersNoThrow();
+            }
         }
     }
 
     public static void WriteException(string context, Exception exception)
     {
         WriteLine($"{context}: {exception}");
+    }
+
+    public static void Shutdown()
+    {
+        lock (Gate)
+        {
+            CloseWritersNoThrow();
+        }
     }
 
     public static void OpenLogDirectory(Action<string>? onError = null)
@@ -96,6 +106,8 @@ internal static class AppLogger
         WriteLine("OS: " + Environment.OSVersion);
         WriteLine(".NET: " + Environment.Version);
         WriteLine("Process architecture: " + System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        WriteLine($"CPU count: {Environment.ProcessorCount}; serverGC={System.Runtime.GCSettings.IsServerGC}; GC latency={System.Runtime.GCSettings.LatencyMode}");
+        WriteLine($"Startup working set: {Environment.WorkingSet / 1048576d:0.0} MiB");
         WriteLine("Command line: " + Environment.CommandLine);
         if (args.Length > 0)
         {
@@ -115,17 +127,41 @@ internal static class AppLogger
                 DeleteOldLogs();
 
                 _currentLogPath = Path.Combine(_logDirectory, fileName);
-                File.WriteAllText(_currentLogPath, string.Empty);
-                File.WriteAllText(LatestLogPath, string.Empty);
+                _currentWriter = CreateWriter(_currentLogPath);
+                _latestWriter = CreateWriter(LatestLogPath);
                 return;
             }
             catch (Exception ex)
             {
+                CloseWritersNoThrow();
                 Debug.WriteLine("Could not initialize OpenDisplayReceiver log in " + baseDirectory + ": " + ex);
             }
         }
 
         _currentLogPath = string.Empty;
+    }
+
+    private static StreamWriter CreateWriter(string path)
+    {
+        var stream = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 32 * 1024,
+            FileOptions.SequentialScan);
+        return new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 8 * 1024)
+        {
+            AutoFlush = true,
+        };
+    }
+
+    private static void CloseWritersNoThrow()
+    {
+        try { _currentWriter?.Dispose(); } catch { }
+        try { _latestWriter?.Dispose(); } catch { }
+        _currentWriter = null;
+        _latestWriter = null;
     }
 
     private static IEnumerable<string> CandidateBaseDirectories()
