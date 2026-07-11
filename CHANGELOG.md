@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.0](https://github.com/TimothyZhang023/opendisplay/compare/v0.2.2...v0.3.0) (2026-07-11)
+
+
+### Features
+
+* **windows:** configure ffplay log level ([4b49746](https://github.com/TimothyZhang023/opendisplay/commit/4b4974634d39bfe307ac9d8621c2a60c6cb30579))
+
+
+### Bug Fixes
+
+* **windows:** await receiver cleanup before logger shutdown ([92c8396](https://github.com/TimothyZhang023/opendisplay/commit/92c83964bd231e1ed8e1c099d5b2941a89aac8f9))
+* **windows:** bound receiver shutdown wait ([6c25cc4](https://github.com/TimothyZhang023/opendisplay/commit/6c25cc493e272dfcccf6478308be26fbfe7222ee))
+* **windows:** flush logs on shutdown ([db48ab7](https://github.com/TimothyZhang023/opendisplay/commit/db48ab7f659c7af768c9f532d2a5561509b5c987))
+* **windows:** remove nullable output sample warning ([98a5b07](https://github.com/TimothyZhang023/opendisplay/commit/98a5b0722732e83123d65507d8dcb315bcc2e81c))
+
+
+### Performance Improvements
+
+* **windows:** add lock-free receiver telemetry ([87038d5](https://github.com/TimothyZhang023/opendisplay/commit/87038d56aaba73378895972f1593c8ad6f859506))
+* **windows:** bound UI logging ([25cd239](https://github.com/TimothyZhang023/opendisplay/commit/25cd2392f66a7d68360c32c749209b39e1986748))
+* **windows:** harden receiver hot path and diagnostics ([cbbfd28](https://github.com/TimothyZhang023/opendisplay/commit/cbbfd2830715c648eb30fd1f6980687130f44eac))
+* **windows:** reuse connection receive buffers ([a79d6b8](https://github.com/TimothyZhang023/opendisplay/commit/a79d6b8b2844d20346ac969db463e3c1e2ef611c))
+* **windows:** reuse log file handles ([e5454c4](https://github.com/TimothyZhang023/opendisplay/commit/e5454c4cb3142d82ba333236d32783cc4163f4ac))
+* **windows:** use ValueTask for frame writes ([64d7b43](https://github.com/TimothyZhang023/opendisplay/commit/64d7b43e686e71cc17da3c6f310704f1d34fe8f3))
+
 ## [0.2.2](https://github.com/TimothyZhang023/opendisplay/compare/v0.2.1...v0.2.2) (2026-07-10)
 
 
