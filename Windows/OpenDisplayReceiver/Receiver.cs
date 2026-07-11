@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -14,6 +15,8 @@ internal sealed class Receiver
     private readonly Action<string> _log;
     private readonly Action<string> _status;
     private CancellationTokenSource? _activeClient;
+    private Task? _activeClientTask;
+    private long _nextConnectionId;
     private static readonly int[] StartupKeyframeRetryScheduleMs = [250, 750, 1500, 2500];
 
     public Receiver(ReceiverOptions options, Control? videoHost = null, Action<string>? log = null, Action<string>? status = null)
@@ -41,26 +44,57 @@ internal sealed class Receiver
             {
                 var client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
                 client.NoDelay = true;
-                Log($"Accepted {client.Client.RemoteEndPoint}");
+                var connectionId = Interlocked.Increment(ref _nextConnectionId);
+                var remoteEndpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+                Log($"[conn {connectionId}] Accepted {remoteEndpoint}; noDelay={client.NoDelay}; receiveBuffer={client.ReceiveBufferSize}");
                 _status("Mac connected");
 
                 _activeClient?.Cancel();
                 _activeClient?.Dispose();
                 _activeClient = CancellationTokenSource.CreateLinkedTokenSource(token);
-                _ = HandleClientAsync(client, _activeClient.Token);
+                _activeClientTask = ObserveClientTaskAsync(
+                    HandleClientAsync(client, connectionId, remoteEndpoint, _activeClient.Token),
+                    connectionId);
             }
         }
         finally
         {
             listener.Stop();
             _activeClient?.Cancel();
+            if (_activeClientTask is not null)
+            {
+                try
+                {
+                    await _activeClientTask.ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Log("Active client shutdown wait failed: " + ex);
+                }
+            }
             _activeClient?.Dispose();
         }
     }
 
-    private async Task HandleClientAsync(TcpClient client, CancellationToken token)
+    private async Task ObserveClientTaskAsync(Task sessionTask, long connectionId)
     {
-        await using var videoSink = CreateVideoSink();
+        try
+        {
+            await sessionTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log($"[conn {connectionId}] Unhandled session task failure: {ex}");
+            _status("Connection failed: " + ex.Message);
+        }
+    }
+
+    private async Task HandleClientAsync(TcpClient client, long connectionId, string remoteEndpoint, CancellationToken token)
+    {
+        void ConnectionLog(string message) => Log($"[conn {connectionId}] {message}");
+
+        var connectionStarted = Stopwatch.GetTimestamp();
+        await using var videoSink = CreateVideoSink(ConnectionLog);
         using var ownedClient = client;
         using var stream = ownedClient.GetStream();
         using var sendLock = new SemaphoreSlim(1, 1);
@@ -74,55 +108,74 @@ internal sealed class Receiver
 
         try
         {
-            Log("Video renderer selected: " + videoSink.Name);
-            await SendHelloAsync(stream, sendLock, connectionToken).ConfigureAwait(false);
+            ConnectionLog($"Session starting: remote={remoteEndpoint}; renderer={videoSink.Name}");
+            await SendHelloAsync(stream, sendLock, ConnectionLog, connectionToken).ConfigureAwait(false);
             await RequestKeyframeAsync(stream, sendLock, "hello", connectionToken).ConfigureAwait(false);
-            Log("Requested H.264 keyframe immediately after hello");
+            ConnectionLog("Requested H.264 keyframe immediately after hello");
 
-            startupKeyframeTask = StartupKeyframeRetryLoopAsync(stream, sendLock, startupKeyframeCts.Token);
-            pingTask = PingLoopAsync(stream, sendLock, connectionToken);
-            statsTask = StatsLoopAsync(stream, sendLock, stats, connectionToken);
+            startupKeyframeTask = RunBackgroundTaskAsync(
+                "startup keyframe loop",
+                () => StartupKeyframeRetryLoopAsync(stream, sendLock, ConnectionLog, startupKeyframeCts.Token),
+                startupKeyframeCts.Token,
+                connectionCts,
+                ConnectionLog);
+            pingTask = RunBackgroundTaskAsync(
+                "ping loop",
+                () => PingLoopAsync(stream, sendLock, connectionToken),
+                connectionToken,
+                connectionCts,
+                ConnectionLog);
+            statsTask = RunBackgroundTaskAsync(
+                "stats loop",
+                () => StatsLoopAsync(stream, sendLock, stats, ConnectionLog, connectionToken),
+                connectionToken,
+                connectionCts,
+                ConnectionLog);
             await ReadFramesAsync(
                 stream,
                 videoSink,
                 stats,
                 startupKeyframeCts.Cancel,
+                ConnectionLog,
                 connectionToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (connectionToken.IsCancellationRequested)
         {
-            // Replaced by a newer connection or app shutdown.
+            ConnectionLog("Session cancelled (receiver stopping or connection replaced)");
         }
         catch (EndOfStreamException)
         {
-            Log("Mac disconnected");
+            ConnectionLog("Mac disconnected (end of stream)");
             _status("Mac disconnected");
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
         {
-            Log("ffplay.exe was not found. Use the packaged release zip or pass --ffplay <path>.");
+            ConnectionLog($"ffplay.exe was not found: {ex}. Use the packaged release zip or pass --ffplay <path>.");
             _status("ffplay.exe not found");
         }
         catch (Exception ex)
         {
-            Log($"Connection failed: {ex.Message}");
+            ConnectionLog("Session failed: " + ex);
             _status("Connection failed: " + ex.Message);
         }
         finally
         {
             startupKeyframeCts.Cancel();
             connectionCts.Cancel();
-            await ObserveBackgroundTasksAsync(startupKeyframeTask, pingTask, statsTask).ConfigureAwait(false);
+            await Task.WhenAll(startupKeyframeTask, pingTask, statsTask).ConfigureAwait(false);
+            var totals = stats.GetTotals();
+            var elapsed = Stopwatch.GetElapsedTime(connectionStarted);
+            ConnectionLog($"Session ended: duration={elapsed.TotalSeconds:0.0}s; frames={totals.Frames}; videoMiB={totals.Bytes / 1048576d:0.0}");
         }
     }
 
-    private IVideoSink CreateVideoSink() => _options.Renderer switch
+    private IVideoSink CreateVideoSink(Action<string> log) => _options.Renderer switch
     {
-        VideoRendererKind.Native => new NativeH264Sink(_options, _videoHost, Log),
-        _ => new FfplaySink(_options, _videoHost, Log),
+        VideoRendererKind.Native => new NativeH264Sink(_options, _videoHost, log),
+        _ => new FfplaySink(_options, _videoHost, log),
     };
 
-    private async Task SendHelloAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
+    private async Task SendHelloAsync(Stream stream, SemaphoreSlim sendLock, Action<string> log, CancellationToken token)
     {
         var hello = new Dictionary<string, object?>
         {
@@ -135,7 +188,7 @@ internal sealed class Receiver
             ["localCursor"] = false,
         };
         await SendControlAsync(stream, sendLock, hello, token).ConfigureAwait(false);
-        Log($"Sent hello: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x");
+        log($"Sent hello: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x");
     }
 
     private static async Task PingLoopAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
@@ -151,12 +204,23 @@ internal sealed class Receiver
         }
     }
 
-    private static async Task StatsLoopAsync(Stream stream, SemaphoreSlim sendLock, FrameStats stats, CancellationToken token)
+    private static async Task StatsLoopAsync(
+        Stream stream,
+        SemaphoreSlim sendLock,
+        FrameStats stats,
+        Action<string> log,
+        CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
             var snapshot = stats.TakeSnapshot();
+            log(
+                $"perf: fps={snapshot.Fps}; bitrate={snapshot.Mbps:0.0}Mbps; stalls={snapshot.Stalls}; " +
+                $"frameMax={snapshot.MaxFrameBytes / 1024d:0}KiB; sinkWrite={snapshot.AverageSinkWriteMs:0.00}/{snapshot.MaxSinkWriteMs:0.00}ms(avg/max); " +
+                $"slowWrites={snapshot.SlowSinkWrites}; rtt={snapshot.ControlRttMs}ms; rxBuffer={snapshot.ReceiveBufferBytes / 1024d:0}KiB; " +
+                $"managed={snapshot.ManagedMemoryBytes / 1048576d:0.0}MiB; workingSet={snapshot.WorkingSetBytes / 1048576d:0.0}MiB; " +
+                $"gc={snapshot.Gen0Collections}/{snapshot.Gen1Collections}/{snapshot.Gen2Collections}(gen0/1/2)");
             await SendControlAsync(stream, sendLock, new Dictionary<string, object?>
             {
                 ["type"] = "stats",
@@ -174,41 +238,56 @@ internal sealed class Receiver
         IVideoSink videoSink,
         FrameStats stats,
         Action onRendererStarted,
+        Action<string> log,
         CancellationToken token)
     {
+        const int initialReceiveBufferBytes = 256 * 1024;
+        const int maxPayloadBytes = 32 * 1024 * 1024;
         const int maxCachedParameterSetBytes = 64 * 1024;
         var header = new byte[4];
         var announcedVideo = false;
         var sinkStarted = false;
-        var startupGate = new H264StartupGate(Log);
+        var startupGate = new H264StartupGate(log);
         var startupParameterSets = new ArrayBufferWriter<byte>(256);
+        var receiveBuffer = ArrayPool<byte>.Shared.Rent(initialReceiveBufferBytes);
+        stats.SetReceiveBufferCapacity(receiveBuffer.Length);
+        log($"Receive buffer initialized: capacity={receiveBuffer.Length} bytes");
 
-        while (!token.IsCancellationRequested)
+        try
         {
-            await ReadExactAsync(stream, header, token).ConfigureAwait(false);
-            var rawLength = BinaryPrimitives.ReadUInt32BigEndian(header);
-            if (rawLength == 0 || rawLength > 64 * 1024 * 1024)
+            while (!token.IsCancellationRequested)
             {
-                throw new InvalidDataException($"Invalid frame length: {rawLength}");
-            }
-            var length = (int)rawLength;
+                await ReadExactAsync(stream, header, token).ConfigureAwait(false);
+                var rawLength = BinaryPrimitives.ReadUInt32BigEndian(header);
+                if (rawLength == 0 || rawLength > maxPayloadBytes)
+                {
+                    throw new InvalidDataException($"Invalid payload length: {rawLength}; max={maxPayloadBytes}");
+                }
+                var length = (int)rawLength;
 
-            var rentedPayload = ArrayPool<byte>.Shared.Rent(length);
-            try
-            {
-                var payload = rentedPayload.AsMemory(0, length);
+                if (length > receiveBuffer.Length)
+                {
+                    var previousCapacity = receiveBuffer.Length;
+                    var largerBuffer = ArrayPool<byte>.Shared.Rent(length);
+                    ArrayPool<byte>.Shared.Return(receiveBuffer);
+                    receiveBuffer = largerBuffer;
+                    stats.SetReceiveBufferCapacity(receiveBuffer.Length);
+                    log($"Receive buffer grew: requested={length}; capacity={previousCapacity}->{receiveBuffer.Length} bytes");
+                }
+
+                var payload = receiveBuffer.AsMemory(0, length);
                 await ReadExactAsync(stream, payload, token).ConfigureAwait(false);
 
                 if (IsPureJson(payload.Span))
                 {
-                    HandleMacJson(payload);
+                    HandleMacJson(payload, stats, log);
                     continue;
                 }
 
                 var startCode = FindAnnexBStartCode(payload.Span);
                 if (startCode < 0)
                 {
-                    Log($"Skipping non-JSON payload without Annex B start code ({payload.Length} bytes)");
+                    log($"Skipping non-JSON payload without Annex B start code ({payload.Length} bytes)");
                     continue;
                 }
 
@@ -219,7 +298,7 @@ internal sealed class Receiver
                     analysis = H264Analysis.Analyze(video.Span);
                     if (analysis.NalCount == 0)
                     {
-                        Log($"Skipping Annex B payload without complete NAL units ({video.Length} bytes)");
+                        log($"Skipping Annex B payload without complete NAL units ({video.Length} bytes)");
                         continue;
                     }
 
@@ -234,32 +313,38 @@ internal sealed class Receiver
                     if (startupParameterSets.WrittenCount > 0 && (!analysis.HasSps || !analysis.HasPps))
                     {
                         await videoSink.WriteAsync(startupParameterSets.WrittenMemory, token).ConfigureAwait(false);
-                        Log($"Primed decoder with {startupParameterSets.WrittenCount} cached SPS/PPS bytes");
+                        log($"Primed decoder with {startupParameterSets.WrittenCount} cached SPS/PPS bytes");
                     }
 
                     sinkStarted = true;
                     onRendererStarted();
-                    Log($"Video renderer started after H.264 sync: {videoSink.Name}; {analysis.Describe()}");
+                    log($"Video renderer started after H.264 sync: {videoSink.Name}; {analysis.Describe()}");
                 }
 
+                var sinkWriteStarted = Stopwatch.GetTimestamp();
                 await videoSink.WriteAsync(video, token).ConfigureAwait(false);
-                stats.RecordFrame(video.Length);
+                var sinkWriteTicks = Stopwatch.GetTimestamp() - sinkWriteStarted;
+                stats.RecordFrame(video.Length, sinkWriteTicks);
 
                 if (!announcedVideo)
                 {
                     announcedVideo = true;
-                    Log($"Receiving video: {analysis.Describe()}");
+                    log($"Receiving video: {analysis.Describe()}");
                     _status("Receiving video");
                 }
             }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rentedPayload);
-            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(receiveBuffer);
         }
     }
 
-    private async Task StartupKeyframeRetryLoopAsync(Stream stream, SemaphoreSlim sendLock, CancellationToken token)
+    private async Task StartupKeyframeRetryLoopAsync(
+        Stream stream,
+        SemaphoreSlim sendLock,
+        Action<string> log,
+        CancellationToken token)
     {
         try
         {
@@ -269,9 +354,10 @@ internal sealed class Receiver
                 var scheduledDelayMs = StartupKeyframeRetryScheduleMs[i];
                 await Task.Delay(scheduledDelayMs - previousDelayMs, token).ConfigureAwait(false);
                 await RequestKeyframeAsync(stream, sendLock, $"startup-retry-{i + 1}", token).ConfigureAwait(false);
-                Log($"Repeated startup keyframe request #{i + 1} at {scheduledDelayMs} ms");
+                log($"Repeated startup keyframe request #{i + 1} at {scheduledDelayMs} ms");
                 previousDelayMs = scheduledDelayMs;
             }
+            log("Startup keyframe retry schedule completed; still waiting for SPS/PPS/IDR if renderer has not started");
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -289,19 +375,29 @@ internal sealed class Receiver
         }, token).ConfigureAwait(false);
     }
 
-    private static async Task ObserveBackgroundTasksAsync(params Task[] tasks)
+    private static async Task RunBackgroundTaskAsync(
+        string name,
+        Func<Task> operation,
+        CancellationToken expectedCancellation,
+        CancellationTokenSource connectionCts,
+        Action<string> log)
     {
         try
         {
-            await Task.WhenAll(tasks).ConfigureAwait(false);
+            await operation().ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException) when (expectedCancellation.IsCancellationRequested)
         {
-            // The foreground read path reports the connection result.
+            // Expected when the renderer synchronizes or the connection ends.
+        }
+        catch (Exception ex)
+        {
+            log($"Background {name} failed; cancelling session: {ex}");
+            connectionCts.Cancel();
         }
     }
 
-    private void HandleMacJson(ReadOnlyMemory<byte> payload)
+    private static void HandleMacJson(ReadOnlyMemory<byte> payload, FrameStats stats, Action<string> log)
     {
         try
         {
@@ -312,12 +408,13 @@ internal sealed class Receiver
             if (type == "pong" && doc.RootElement.TryGetProperty("t", out var tElement) && tElement.TryGetDouble(out var t))
             {
                 var rtt = Clock.NowMs - t;
-                if (rtt >= 0 && rtt < 2000) Log($"Control RTT {rtt:0} ms");
+                if (rtt >= 0 && rtt < 2000) stats.RecordControlRtt(rtt);
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // Ignore malformed control payloads.
+            var prefix = Convert.ToHexString(payload.Span[..Math.Min(payload.Length, 16)]);
+            log($"Malformed control JSON: bytes={payload.Length}; prefix={prefix}; error={ex.Message}");
         }
     }
 
