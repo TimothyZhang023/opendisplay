@@ -24,7 +24,9 @@ internal static class Program
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new ReceiverForm(options));
+            var receiverForm = new ReceiverForm(options);
+            Application.Run(receiverForm);
+            receiverForm.WaitForReceiverShutdown(TimeSpan.FromSeconds(3));
             AppLogger.WriteLine("WinForms application exited normally");
         }
         catch (Exception ex)
