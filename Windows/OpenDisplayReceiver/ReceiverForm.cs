@@ -6,6 +6,8 @@ namespace OpenDisplayReceiver;
 
 internal sealed class ReceiverForm : Form
 {
+    private const int MaxVisibleLogCharacters = 256 * 1024;
+    private const int VisibleLogTrimCharacters = 64 * 1024;
     private readonly ReceiverOptions _options;
     private readonly CancellationTokenSource _cts = new();
     private readonly Label _statusLabel = new();
@@ -102,7 +104,7 @@ internal sealed class ReceiverForm : Form
             $"Resolution announced to Mac: {_options.PixelsWide}x{_options.PixelsHigh} @ {_options.Scale:0.#}x\r\n" +
             $"Listening port: {_options.Port}\r\n" +
             $"Renderer: {_options.Renderer}\r\n" +
-            $"ffplay mode: {(_options.EmbedVideo ? "embedded (experimental)" : "external window")}; hwaccel={_options.FfplayHardwareAcceleration}\r\n" +
+            $"ffplay mode: {(_options.EmbedVideo ? "embedded (experimental)" : "external window")}; hwaccel={_options.FfplayHardwareAcceleration}; loglevel={_options.FfplayLogLevel}\r\n" +
             $"Bonjour/mDNS: {(_options.EnableMdns ? "advertising _opensidecar._tcp" : "disabled")}\r\n" +
             $"Log file: {AppLogger.CurrentLogPath}\r\n" +
             $"Latest log: {AppLogger.LatestLogPath}\r\n\r\n" +
@@ -161,7 +163,7 @@ internal sealed class ReceiverForm : Form
         AppendLog($"log directory: {AppLogger.LogDirectory}");
         AppendLog($"renderer: {_options.Renderer}");
         AppendLog($"ffplay fallback: {_options.FfplayPath}");
-        AppendLog($"ffplay mode: {(_options.EmbedVideo ? "embedded" : "external")}; hwaccel={_options.FfplayHardwareAcceleration}");
+        AppendLog($"ffplay mode: {(_options.EmbedVideo ? "embedded" : "external")}; hwaccel={_options.FfplayHardwareAcceleration}; loglevel={_options.FfplayLogLevel}");
         AppendLog($"mDNS/Bonjour: {(_options.EnableMdns ? "enabled" : "disabled")}");
         AppendLog("Plain USB-C Mac-to-PC is not a supported transport because both sides are USB hosts. Use TCP over LAN or another real network interface.");
 
@@ -178,8 +180,7 @@ internal sealed class ReceiverForm : Form
             }
             catch (Exception ex)
             {
-                AppLogger.WriteException("Receiver task failed", ex);
-                AppendLog(ex.ToString());
+                AppendLog("Receiver task failed: " + ex);
                 SetStatus("Receiver failed: " + ex.Message);
             }
         });
@@ -226,10 +227,10 @@ internal sealed class ReceiverForm : Form
 
     private void SetStatus(string text)
     {
-        if (IsDisposed) return;
+        if (IsDisposed || Disposing) return;
         if (InvokeRequired)
         {
-            BeginInvoke(new Action(() => SetStatus(text)));
+            try { BeginInvoke(new Action(() => SetStatus(text))); } catch (InvalidOperationException) { }
             return;
         }
         _statusLabel.Text = text;
@@ -237,19 +238,26 @@ internal sealed class ReceiverForm : Form
 
     private void AppendLog(string message)
     {
-        if (IsDisposed)
-        {
-            AppLogger.WriteLine(message);
-            return;
-        }
+        AppLogger.WriteLine(message);
+        if (IsDisposed || Disposing || !IsHandleCreated) return;
 
         if (InvokeRequired)
         {
-            BeginInvoke(new Action(() => AppendLog(message)));
+            try { BeginInvoke(new Action(() => AppendLogToUi(message))); } catch (InvalidOperationException) { }
             return;
         }
 
-        AppLogger.WriteLine(message);
+        AppendLogToUi(message);
+    }
+
+    private void AppendLogToUi(string message)
+    {
+        if (IsDisposed || Disposing) return;
+        if (_logBox.TextLength > MaxVisibleLogCharacters)
+        {
+            _logBox.Select(0, Math.Min(VisibleLogTrimCharacters, _logBox.TextLength));
+            _logBox.SelectedText = string.Empty;
+        }
         _logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
     }
 
