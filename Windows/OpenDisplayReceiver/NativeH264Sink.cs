@@ -278,9 +278,10 @@ internal sealed class NativeH264Sink : IVideoSink
                 }
 
                 NativeMethods.ThrowIfFailed(hr, "ProcessOutput");
-                if (output[0].pSample is not null)
+                var outputSample = output[0].pSample;
+                if (outputSample is not null)
                 {
-                    RenderSample(output[0].pSample);
+                    RenderSample(outputSample);
                 }
             }
         }
