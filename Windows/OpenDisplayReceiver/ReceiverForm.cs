@@ -22,6 +22,8 @@ internal sealed class ReceiverForm : Form
     private FormWindowState _previousWindowState = FormWindowState.Normal;
     private Rectangle _previousBounds = Rectangle.Empty;
     private bool _controlWindowFullscreen;
+    private Task? _receiverTask;
+    private bool _ctsDisposed;
 
     public ReceiverForm(ReceiverOptions options)
     {
@@ -168,7 +170,7 @@ internal sealed class ReceiverForm : Form
         AppendLog("Plain USB-C Mac-to-PC is not a supported transport because both sides are USB hosts. Use TCP over LAN or another real network interface.");
 
         var receiver = new Receiver(_options, _videoSurface, AppendLog, SetStatus);
-        _ = Task.Run(async () =>
+        _receiverTask = Task.Run(async () =>
         {
             try
             {
@@ -184,6 +186,31 @@ internal sealed class ReceiverForm : Form
                 SetStatus("Receiver failed: " + ex.Message);
             }
         });
+    }
+
+    public void WaitForReceiverShutdown(TimeSpan timeout)
+    {
+        var receiverTask = _receiverTask;
+        if (receiverTask is not null)
+        {
+            try
+            {
+                if (!receiverTask.Wait(timeout))
+                {
+                    AppLogger.WriteLine($"Receiver shutdown timed out after {timeout.TotalSeconds:0.0}s");
+                }
+            }
+            catch (AggregateException ex)
+            {
+                AppLogger.WriteException("Receiver shutdown wait failed", ex.Flatten());
+            }
+        }
+
+        if (!_ctsDisposed)
+        {
+            _cts.Dispose();
+            _ctsDisposed = true;
+        }
     }
 
     private string BuildMacCommands()
@@ -263,10 +290,9 @@ internal sealed class ReceiverForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !_ctsDisposed)
         {
             _cts.Cancel();
-            _cts.Dispose();
         }
         base.Dispose(disposing);
     }
