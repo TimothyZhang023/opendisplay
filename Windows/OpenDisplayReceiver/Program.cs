@@ -32,6 +32,11 @@ internal static class Program
             AppLogger.WriteException("Fatal startup/application exception", ex);
             ShowCrashDialog(ex);
         }
+        finally
+        {
+            AppLogger.WriteLine("OpenDisplay Receiver process shutting down");
+            AppLogger.Shutdown();
+        }
     }
 
     private static void InstallExceptionHandlers()
