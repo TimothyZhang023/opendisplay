@@ -39,12 +39,12 @@ internal sealed class NativeH264Sink : IVideoSink
         }
         catch (Exception ex)
         {
-            _log("Native Windows H.264 renderer unavailable; falling back to ffplay: " + ex.Message);
+            _log("Native Windows H.264 renderer unavailable; falling back to ffplay: " + ex);
             await StartFallbackAsync(token).ConfigureAwait(false);
         }
     }
 
-    public async Task WriteAsync(ReadOnlyMemory<byte> data, CancellationToken token)
+    public async ValueTask WriteAsync(ReadOnlyMemory<byte> data, CancellationToken token)
     {
         if (_usingFallback)
         {
@@ -68,7 +68,7 @@ internal sealed class NativeH264Sink : IVideoSink
             if (!_reportedDecodeFailure)
             {
                 _reportedDecodeFailure = true;
-                _log("Native H.264 decode failed; switching to ffplay fallback: " + ex.Message);
+                _log("Native H.264 decode failed; switching to ffplay fallback: " + ex);
             }
             await StartFallbackAsync(token).ConfigureAwait(false);
             await _fallback.WriteAsync(data, token).ConfigureAwait(false);
@@ -278,9 +278,10 @@ internal sealed class NativeH264Sink : IVideoSink
                 }
 
                 NativeMethods.ThrowIfFailed(hr, "ProcessOutput");
-                if (output[0].pSample is not null)
+                var outputSample = output[0].pSample;
+                if (outputSample is not null)
                 {
-                    RenderSample(output[0].pSample);
+                    RenderSample(outputSample);
                 }
             }
         }

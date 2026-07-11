@@ -19,6 +19,7 @@ internal sealed class ReceiverOptions
     public string DeviceName { get; init; } = $"OpenDisplay Windows ({Environment.MachineName})";
     public string FfplayPath { get; init; } = ResolveDefaultFfplayPath();
     public string FfplayHardwareAcceleration { get; init; } = "auto";
+    public string FfplayLogLevel { get; init; } = "info";
     public bool Fullscreen { get; init; } = true;
     public bool EmbedVideo { get; init; }
     public bool EnableMdns { get; init; } = true;
@@ -37,6 +38,7 @@ internal sealed class ReceiverOptions
         "  --renderer ffplay|native",
         "  --ffplay \"C:\\ffmpeg\\bin\\ffplay.exe\"",
         "  --ffplay-hwaccel auto|none|d3d11va|dxva2|qsv|cuda",
+        "  --ffplay-loglevel error|warning|info|verbose|debug|trace",
         "  --fullscreen       Start fullscreen. This is the default.",
         "  --windowed         Start as a normal window.",
         "  --embed            Experimental: embed ffplay in WinForms (external is the default).",
@@ -103,6 +105,7 @@ internal sealed class ReceiverOptions
             DeviceName = ReadString(values, "--name", defaults.DeviceName),
             FfplayPath = ReadString(values, "--ffplay", defaults.FfplayPath),
             FfplayHardwareAcceleration = ReadFfplayHardwareAcceleration(values, defaults.FfplayHardwareAcceleration),
+            FfplayLogLevel = ReadFfplayLogLevel(values, defaults.FfplayLogLevel),
             Fullscreen = flags.Contains("--fullscreen") || (!flags.Contains("--windowed") && defaults.Fullscreen),
             EmbedVideo = flags.Contains("--embed") && !flags.Contains("--no-embed"),
             EnableMdns = !flags.Contains("--no-mdns"),
@@ -145,6 +148,16 @@ internal sealed class ReceiverOptions
         return raw.Trim().ToLowerInvariant() switch
         {
             "auto" or "none" or "d3d11va" or "dxva2" or "qsv" or "cuda" => raw.Trim().ToLowerInvariant(),
+            _ => fallback,
+        };
+    }
+
+    private static string ReadFfplayLogLevel(Dictionary<string, string> values, string fallback)
+    {
+        if (!values.TryGetValue("--ffplay-loglevel", out var raw) || string.IsNullOrWhiteSpace(raw)) return fallback;
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "error" or "warning" or "info" or "verbose" or "debug" or "trace" => raw.Trim().ToLowerInvariant(),
             _ => fallback,
         };
     }

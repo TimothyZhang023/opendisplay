@@ -10,6 +10,8 @@ internal sealed class FfplaySink : IVideoSink
     private readonly Action<string> _log;
     private Process? _process;
     private Stream? _input;
+    private Task? _diagnosticsTask;
+    private volatile bool _stopping;
 
     public FfplaySink(ReceiverOptions options, Control? videoHost = null, Action<string>? log = null)
     {
@@ -22,6 +24,7 @@ internal sealed class FfplaySink : IVideoSink
 
     public Task StartAsync(CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         var psi = new ProcessStartInfo
         {
             FileName = _options.FfplayPath,
@@ -46,7 +49,7 @@ internal sealed class FfplaySink : IVideoSink
 
         AddArgs(psi,
             "-hide_banner",
-            "-loglevel", "info");
+            "-loglevel", _options.FfplayLogLevel);
 
         if (_options.FfplayHardwareAcceleration != "none")
         {
@@ -76,15 +79,25 @@ internal sealed class FfplaySink : IVideoSink
 
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start ffplay");
         _input = _process.StandardInput.BaseStream;
-        _log($"Started ffplay video renderer (hwaccel={_options.FfplayHardwareAcceleration}, probe=1048576, analyze=1000000us)");
-        _ = DrainDiagnosticsAsync(_process, token);
+        _log($"Started ffplay: pid={_process.Id}; hwaccel={_options.FfplayHardwareAcceleration}; loglevel={_options.FfplayLogLevel}; probe=1048576; analyze=1000000us");
+        try
+        {
+            var module = _process.MainModule;
+            _log($"ffplay executable: path={module?.FileName ?? _options.FfplayPath}; version={module?.FileVersionInfo.FileVersion ?? "unknown"}");
+        }
+        catch (Exception ex)
+        {
+            _log("Could not inspect ffplay executable metadata: " + ex.Message);
+        }
+        _log("ffplay arguments: " + FormatArguments(psi.ArgumentList));
+        _diagnosticsTask = DrainDiagnosticsAsync(_process);
         return Task.CompletedTask;
     }
 
-    public Task WriteAsync(ReadOnlyMemory<byte> data, CancellationToken token)
+    public ValueTask WriteAsync(ReadOnlyMemory<byte> data, CancellationToken token)
     {
         var input = _input ?? throw new IOException("ffplay is not running");
-        return input.WriteAsync(data, token).AsTask();
+        return input.WriteAsync(data, token);
     }
 
     private static void AddArgs(ProcessStartInfo psi, params string[] args)
@@ -95,44 +108,78 @@ internal sealed class FfplaySink : IVideoSink
         }
     }
 
-    private async Task DrainDiagnosticsAsync(Process process, CancellationToken token)
+    private static string FormatArguments(IEnumerable<string> arguments) =>
+        string.Join(" ", arguments.Select(arg => arg.Any(char.IsWhiteSpace) ? $"\"{arg.Replace("\"", "\\\"")}\"" : arg));
+
+    private async Task DrainDiagnosticsAsync(Process process)
     {
         try
         {
-            while (!token.IsCancellationRequested)
+            while (true)
             {
                 var line = await process.StandardError.ReadLineAsync().ConfigureAwait(false);
                 if (line is null) break;
                 if (!string.IsNullOrWhiteSpace(line)) _log($"ffplay: {line}");
             }
+
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            _log($"ffplay exited: pid={process.Id}; exitCode={process.ExitCode}; expected={_stopping}");
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore shutdown races.
+            if (!_stopping)
+            {
+                _log("ffplay diagnostics failed: " + ex);
+            }
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_process is null) return;
+        var process = _process;
+        if (process is null) return;
 
-        try { _input?.Close(); } catch { }
+        _stopping = true;
+        try
+        {
+            _input?.Close();
+        }
+        catch (Exception ex)
+        {
+            _log("Closing ffplay stdin failed: " + ex);
+        }
         _input = null;
         try
         {
-            if (!_process.HasExited)
+            if (!process.HasExited)
             {
-                _process.Kill(entireProcessTree: true);
-                await _process.WaitForExitAsync().ConfigureAwait(false);
+                using var gracefulExit = new CancellationTokenSource(TimeSpan.FromMilliseconds(750));
+                try
+                {
+                    await process.WaitForExitAsync(gracefulExit.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    _log($"ffplay pid={process.Id} did not exit after stdin closed; terminating process tree");
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync().ConfigureAwait(false);
+                }
+            }
+
+            if (_diagnosticsTask is not null)
+            {
+                await _diagnosticsTask.ConfigureAwait(false);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore shutdown races.
+            _log("ffplay shutdown failed: " + ex);
         }
         finally
         {
-            _process.Dispose();
+            process.Dispose();
+            _process = null;
+            _diagnosticsTask = null;
         }
     }
 }
