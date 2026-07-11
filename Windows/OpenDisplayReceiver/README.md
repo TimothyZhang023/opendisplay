@@ -35,6 +35,7 @@ Useful debug commands:
 .\OpenDisplayReceiver.exe --windowed
 .\OpenDisplayReceiver.exe --windowed --renderer ffplay
 .\OpenDisplayReceiver.exe --windowed --ffplay-hwaccel d3d11va
+.\OpenDisplayReceiver.exe --windowed --ffplay-loglevel verbose
 .\OpenDisplayReceiver.exe --windowed --ffplay-hwaccel none
 .\OpenDisplayReceiver.exe --windowed --renderer native
 .\OpenDisplayReceiver.exe --windowed --no-mdns
@@ -49,7 +50,11 @@ The app writes a persistent log file on every run:
 %LOCALAPPDATA%\OpenDisplayReceiver\Logs\latest.log
 ```
 
-The receiver window shows the current log path and has **Copy log path** and **Open log folder** buttons. Startup details, renderer selection, H.264 startup NAL types, keyframe requests, mDNS status, connection events, ffplay output, and unhandled exceptions are written there. Logs older than 14 days are removed on startup. If `%LOCALAPPDATA%` logging cannot be initialized, the logger falls back to the system temp directory instead of crashing the app.
+The receiver window shows the current log path and has **Copy log path** and **Open log folder** buttons. Startup details, renderer selection, H.264 startup NAL types, keyframe requests, mDNS status, connection events, ffplay arguments/output/exit code, and full exception stacks are written there. Each connection has a `[conn N]` correlation id.
+
+Every five seconds a `perf:` line records FPS, bitrate, stalls, maximum encoded-frame size, average/maximum ffplay pipe-write latency, slow writes, control RTT, receive-buffer capacity, managed memory, process working set, and Gen0/1/2 collections. Use `--ffplay-loglevel verbose` or `debug` when the default `info` output is insufficient. The on-screen log is bounded, while complete logs remain in the files.
+
+Logs older than 14 days are removed on startup. The logger keeps file handles open instead of reopening two files for every line and flushes each completed line for crash diagnosis. If `%LOCALAPPDATA%` logging cannot be initialized, it falls back to the system temp directory instead of crashing the app.
 
 ## Build and run from source
 
@@ -79,6 +84,7 @@ Useful options:
 --ffplay "C:\ffmpeg\bin\ffplay.exe"
 --ffplay-hwaccel auto    # default: let FFmpeg choose D3D11VA/DXVA2/QSV/CUDA
 --ffplay-hwaccel none    # diagnostic software-decoding fallback
+--ffplay-loglevel info   # error|warning|info|verbose|debug|trace
 --fullscreen             # default: start the external ffplay window fullscreen
 --windowed               # start ffplay as a normal external window
 --embed                  # experimental SDL_WINDOWID embedding; external is safer/default
@@ -92,7 +98,7 @@ For the default external ffplay window, use ffplay's `F` key to toggle fullscree
 
 The receiver starts ffplay with raw H.264 input, `-analyzeduration 1000000`, `-probesize 1048576`, hardware acceleration, direct AVIO, no demux buffering, low-delay decode, video-clock sync, and frame dropping. `ffplay` stderr stays in the application log so the selected hardware path or software fallback can be verified on the target PC.
 
-The steady-state receive path rents frame buffers from `ArrayPool<byte>` and passes a slice directly from `NetworkStream` to ffplay stdin. It no longer allocates a large byte array or flushes the pipe for every video frame; startup NAL parsing stops once SPS/PPS/IDR synchronization completes.
+The steady-state receive path rents one connection-level buffer from `ArrayPool<byte>`, grows it only when required, and reuses it for every frame. A `ReadOnlyMemory<byte>` slice goes directly from `NetworkStream` to ffplay stdin through `ValueTask`, avoiding per-frame arrays, pool churn, Task conversion, and pipe flushes. Startup NAL parsing stops once SPS/PPS/IDR synchronization completes.
 
 ## Bonjour / mDNS discovery
 
@@ -170,7 +176,8 @@ Implemented:
 - External ffplay SDL window by default; experimental embedding with `--embed`
 - Automatic ffplay H.264 hardware acceleration with a selectable override
 - H.264 SPS/PPS/IDR startup sync, parameter-set priming, and scheduled keyframe requests
-- Pooled steady-state frame buffers and no per-frame pipe flush
+- One reusable pooled receive buffer per connection, `ValueTask` pipe writes, and no per-frame flush
+- Correlated connection logs and five-second decoder/backpressure/memory/GC telemetry
 - Native Windows H.264 rendering with Media Foundation for testing
 - Persistent app and crash logs in `%LOCALAPPDATA%\OpenDisplayReceiver\Logs`
 - Debug CI artifact with PDB symbols
